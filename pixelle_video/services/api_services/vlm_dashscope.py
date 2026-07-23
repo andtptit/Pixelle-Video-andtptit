@@ -28,6 +28,7 @@ class QwenVLClient:
         :param model: 模型名（如 qwen3.5-plus/qwen3.5-max 等）
         """
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
+        self.base_url = base_url or os.getenv("DASHSCOPE_BASE_URL")
 
     def chat(
         self,
@@ -53,6 +54,8 @@ class QwenVLClient:
             raise RuntimeError("dashscope package not installed. Run: pip install dashscope")
 
         dashscope.api_key = self.api_key
+        if self.base_url:
+            dashscope.base_http_api_url = self.base_url
         # 只支持非流式
         try:
             content = [

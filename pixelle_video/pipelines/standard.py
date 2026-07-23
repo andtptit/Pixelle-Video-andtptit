@@ -111,7 +111,11 @@ class StandardPipeline(LinearVideoPipeline):
         min_words = ctx.params.get("min_narration_words", 5)
         max_words = ctx.params.get("max_narration_words", 20)
         
-        if mode == "generate":
+        if mode == "remix":
+            # [PIXELLE-CUSTOM] Remix mode: reuse edited narrations as-is, no LLM call.
+            ctx.narrations = ctx.params.get("remix_narrations") or []
+            logger.info(f"✅ Remix mode: reusing {len(ctx.narrations)} edited narrations")
+        elif mode == "generate":
             self._report_progress(ctx.progress_callback, "generating_narrations", 0.05)
             ctx.narrations = await generate_narrations_from_topic(
                 self.llm,
@@ -153,6 +157,13 @@ class StandardPipeline(LinearVideoPipeline):
 
     async def plan_visuals(self, ctx: PipelineContext):
         """Step 4: Generate image prompts or visual descriptions."""
+        # [PIXELLE-CUSTOM] Remix mode: reusing existing images, no new image prompts needed.
+        if ctx.params.get("mode") == "remix":
+            ctx.image_prompts = [None] * len(ctx.narrations)
+            logger.info("⚡ Remix mode: skipping image prompt generation (reusing existing media)")
+            return
+        # [/PIXELLE-CUSTOM]
+
         # Detect template type to determine if media generation is needed
         frame_template = ctx.params.get("frame_template") or "1080x1920/default.html"
         
@@ -290,6 +301,17 @@ class StandardPipeline(LinearVideoPipeline):
                 created_at=datetime.now()
             )
             ctx.storyboard.frames.append(frame)
+
+        # [PIXELLE-CUSTOM] Remix mode: reattach media (image/video) from the source task
+        # by frame index, so produce_assets/frame_processor skip regenerating it.
+        if ctx.params.get("mode") == "remix":
+            source_frames = ctx.params.get("remix_source_frames") or []
+            for frame, source in zip(ctx.storyboard.frames, source_frames):
+                frame.media_type = source.get("media_type")
+                frame.image_path = source.get("image_path")
+                frame.video_path = source.get("video_path")
+            logger.info(f"⚡ Remix mode: reattached media from {len(source_frames)} source frames")
+        # [/PIXELLE-CUSTOM]
 
     async def produce_assets(self, ctx: PipelineContext):
         """Step 6: Generate audio, images, and render frames (Core processing)."""

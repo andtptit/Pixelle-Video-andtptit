@@ -36,6 +36,102 @@ async def _generate_script_preview(pixelle_video, topic: str, n_scenes: int):
 # [/PIXELLE-CUSTOM]
 
 
+# [PIXELLE-CUSTOM] Remix — reuse the images/videos from a previously generated
+# video and only lightly edit the narration text (wording/tone), so no new
+# image/video generation cost is incurred, only a fresh TTS pass.
+async def _list_remix_candidates(pixelle_video, limit: int = 30):
+    result = await pixelle_video.history.get_task_list(
+        page=1, page_size=limit, status="completed",
+        sort_by="created_at", sort_order="desc",
+    )
+    return result.get("tasks", [])
+
+
+async def _load_remix_source(pixelle_video, task_id: str):
+    return await pixelle_video.history.get_task_detail(task_id)
+
+
+def _render_remix_section(pixelle_video) -> dict:
+    st.caption(tr("remix.hint"))
+
+    candidates = run_async(_list_remix_candidates(pixelle_video))
+    if not candidates:
+        st.info(tr("remix.no_candidates"))
+        return {
+            "batch_mode": False, "mode": "remix", "text": "", "title": "",
+            "n_scenes": 0, "split_mode": "paragraph",
+            "remix_narrations": [], "remix_source_frames": [],
+        }
+
+    options = {t["task_id"]: f"{t.get('title') or t['task_id']} ({t.get('n_frames', 0)} scenes)" for t in candidates}
+    selected_task_id = st.selectbox(
+        tr("remix.select_task"),
+        options=list(options.keys()),
+        format_func=lambda tid: options[tid],
+        key="remix_task_id",
+    )
+
+    load_clicked = st.button(tr("remix.load_button"), key="remix_load_btn", use_container_width=True)
+    if load_clicked:
+        detail = run_async(_load_remix_source(pixelle_video, selected_task_id))
+        storyboard = detail.get("storyboard") if detail else None
+        if not storyboard or not storyboard.frames:
+            st.error(tr("remix.load_failed"))
+        else:
+            st.session_state["remix_loaded_task_id"] = selected_task_id
+            st.session_state["remix_title"] = storyboard.title or ""
+            st.session_state["remix_source_frames"] = [
+                {
+                    "media_type": f.media_type,
+                    "image_path": f.image_path,
+                    "video_path": f.video_path,
+                }
+                for f in storyboard.frames
+            ]
+            st.session_state.pop("remix_narrations_input", None)
+            st.session_state["remix_narrations_default"] = [f.narration for f in storyboard.frames]
+
+    if st.session_state.get("remix_loaded_task_id") and st.session_state.get("remix_source_frames"):
+        n_scenes = len(st.session_state["remix_source_frames"])
+        st.text_input(
+            tr("script_preview.title_label"),
+            value=st.session_state.get("remix_title", ""),
+            key="remix_title_input",
+        )
+        st.text_area(
+            tr("remix.narration_label"),
+            value="\n".join(st.session_state.get("remix_narrations_default", [])),
+            height=250,
+            key="remix_narrations_input",
+            help=tr("remix.narration_help"),
+        )
+        edited_lines = [
+            line.strip() for line in
+            st.session_state.get("remix_narrations_input", "").split("\n")
+            if line.strip()
+        ]
+        if len(edited_lines) != n_scenes:
+            st.warning(tr("remix.line_count_mismatch", expected=n_scenes, actual=len(edited_lines)))
+
+        return {
+            "batch_mode": False,
+            "mode": "remix",
+            "text": "\n".join(edited_lines),
+            "title": st.session_state.get("remix_title_input", ""),
+            "n_scenes": n_scenes,
+            "split_mode": "paragraph",
+            "remix_narrations": edited_lines if len(edited_lines) == n_scenes else None,
+            "remix_source_frames": st.session_state["remix_source_frames"],
+        }
+
+    return {
+        "batch_mode": False, "mode": "remix", "text": "", "title": "",
+        "n_scenes": 0, "split_mode": "paragraph",
+        "remix_narrations": None, "remix_source_frames": [],
+    }
+# [/PIXELLE-CUSTOM]
+
+
 def render_content_input(pixelle_video=None):
     """Render content input section (left column) with batch support"""
     with st.container(border=True):
@@ -51,6 +147,22 @@ def render_content_input(pixelle_video=None):
         )
         
         if not batch_mode:
+            # [PIXELLE-CUSTOM] Remix mode toggle — reuse a previous video's
+            # images/videos, only lightly edit the narration wording.
+            remix_active = False
+            if pixelle_video is not None:
+                remix_active = st.checkbox(
+                    tr("remix.enable"),
+                    value=False,
+                    key="remix_enable",
+                    help=tr("remix.enable_help"),
+                )
+            if remix_active:
+                with st.container(border=True):
+                    st.markdown(f"**{tr('remix.section_title')}**")
+                    return _render_remix_section(pixelle_video)
+            # [/PIXELLE-CUSTOM]
+
             # ================================================================
             # Single task mode (original logic, unchanged)
             # ================================================================

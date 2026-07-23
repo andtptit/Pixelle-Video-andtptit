@@ -43,6 +43,10 @@ def render_output_preview(pixelle_video, video_params):
 def render_single_output(pixelle_video, video_params):
     """Render single video generation output (original logic, unchanged)"""
     # Extract parameters from video_params dict
+    # [PIXELLE-CUSTOM] keep a reference to the original params (remix_* fields)
+    # before `video_params` gets reassigned to the whitelisted dict below.
+    original_params = video_params
+    # [/PIXELLE-CUSTOM]
     text = video_params.get("text", "")
     mode = video_params.get("mode", "generate")
     title = video_params.get("title")
@@ -81,6 +85,12 @@ def render_single_output(pixelle_video, video_params):
             if not text:
                 st.error(tr("error.input_required"))
                 st.stop()
+
+            # [PIXELLE-CUSTOM] Remix mode requires a valid narration-per-scene match
+            if mode == "remix" and not original_params.get("remix_narrations"):
+                st.error(tr("remix.invalid_narrations"))
+                st.stop()
+            # [/PIXELLE-CUSTOM]
 
             from pixelle_video.utils.template_util import get_template_type
             if frame_template and get_template_type(frame_template) == "video" and not workflow_key:
@@ -151,6 +161,11 @@ def render_single_output(pixelle_video, video_params):
                     "media_width": st.session_state.get('template_media_width'),
                     "media_height": st.session_state.get('template_media_height'),
                 }
+                # [PIXELLE-CUSTOM] Remix mode: pass through reused narrations/source frames
+                if mode == "remix":
+                    video_params["remix_narrations"] = original_params.get("remix_narrations")
+                    video_params["remix_source_frames"] = original_params.get("remix_source_frames")
+                # [/PIXELLE-CUSTOM]
                 # Add TTS parameters based on mode
                 video_params["tts_inference_mode"] = tts_mode
                 if tts_mode == "local":
