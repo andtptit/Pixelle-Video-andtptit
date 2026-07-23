@@ -17,10 +17,26 @@ Content input components for web UI (left column)
 import streamlit as st
 
 from web.i18n import tr
-from web.utils.async_helpers import get_project_version
+from web.utils.async_helpers import get_project_version, run_async
 
 
-def render_content_input():
+# [PIXELLE-CUSTOM] Script Preview & Edit — lets the user generate the narration
+# script alone (cheap: 1 LLM call, no image/video/TTS cost) and hand-edit it
+# before committing to full video generation.
+async def _generate_script_preview(pixelle_video, topic: str, n_scenes: int):
+    from pixelle_video.utils.content_generators import generate_narrations_from_topic, generate_title
+
+    narrations = await generate_narrations_from_topic(
+        pixelle_video.llm,
+        topic=topic,
+        n_scenes=n_scenes,
+    )
+    title = await generate_title(pixelle_video.llm, topic, strategy="auto")
+    return narrations, title
+# [/PIXELLE-CUSTOM]
+
+
+def render_content_input(pixelle_video=None):
     """Render content input section (left column) with batch support"""
     with st.container(border=True):
         st.markdown(f"**{tr('section.content_input')}**")
@@ -98,14 +114,77 @@ def render_content_input():
                 # Fixed mode: n_scenes is ignored, set default value
                 n_scenes = 5
                 st.info(tr("video.frames_fixed_mode_hint"))
-            
+
+            # [PIXELLE-CUSTOM] Script Preview & Edit (generate mode only) ----------
+            final_mode, final_text, final_title, final_split_mode = mode, text, title, split_mode
+            if mode == "generate" and pixelle_video is not None:
+                with st.expander(tr("script_preview.section_title"), expanded=False):
+                    st.caption(tr("script_preview.hint"))
+
+                    has_preview = bool(st.session_state.get("sp_narrations"))
+                    col_gen, col_clear = st.columns([3, 1])
+                    with col_gen:
+                        gen_label = tr("script_preview.regenerate_button") if has_preview else tr("script_preview.generate_button")
+                        gen_clicked = st.button(gen_label, key="sp_generate_btn", use_container_width=True)
+                    with col_clear:
+                        if has_preview and st.button(tr("script_preview.clear_button"), key="sp_clear_btn", use_container_width=True):
+                            for k in ("sp_narrations", "sp_title", "sp_script_input", "sp_title_input"):
+                                st.session_state.pop(k, None)
+                            st.rerun()
+
+                    if gen_clicked:
+                        if not text.strip():
+                            st.warning(tr("script_preview.empty_topic_warning"))
+                        else:
+                            with st.spinner(tr("script_preview.generating")):
+                                try:
+                                    narrations, gen_title = run_async(
+                                        _generate_script_preview(pixelle_video, text, n_scenes)
+                                    )
+                                    st.session_state["sp_narrations"] = narrations
+                                    st.session_state["sp_title"] = gen_title
+                                    # Drop stale widget state so the text_area/text_input
+                                    # below re-initialize from the freshly generated values
+                                    # instead of showing a previous (possibly edited) draft.
+                                    st.session_state.pop("sp_script_input", None)
+                                    st.session_state.pop("sp_title_input", None)
+                                    st.success(tr("script_preview.success"))
+                                except Exception as e:
+                                    st.error(tr("script_preview.error", error=str(e)))
+
+                    if st.session_state.get("sp_narrations"):
+                        st.text_input(
+                            tr("script_preview.title_label"),
+                            value=st.session_state.get("sp_title", ""),
+                            key="sp_title_input",
+                        )
+                        st.text_area(
+                            tr("script_preview.narration_label"),
+                            value="\n\n".join(st.session_state["sp_narrations"]),
+                            height=250,
+                            key="sp_script_input",
+                        )
+                        st.caption(tr("script_preview.using_edited_notice"))
+
+                        edited_script = st.session_state.get("sp_script_input", "")
+                        if edited_script.strip():
+                            # Hand off to "fixed" mode so Generate Video uses this
+                            # exact (possibly hand-edited) script as-is, with no
+                            # further AI rewriting of the narration text.
+                            final_mode = "fixed"
+                            final_text = edited_script
+                            final_split_mode = "paragraph"
+                            if not final_title:
+                                final_title = st.session_state.get("sp_title_input", "")
+            # [/PIXELLE-CUSTOM] -----------------------------------------------------
+
             return {
                 "batch_mode": False,
-                "mode": mode,
-                "text": text,
-                "title": title,
+                "mode": final_mode,
+                "text": final_text,
+                "title": final_title,
                 "n_scenes": n_scenes,
-                "split_mode": split_mode
+                "split_mode": final_split_mode
             }
         
         else:

@@ -53,7 +53,8 @@ class StandardPipelineUI(PipelineUI):
         # ====================================================================
         with left_col:
             # Content input (mode, text, title, n_scenes)
-            content_params = render_content_input()
+            # [PIXELLE-CUSTOM] pass pixelle_video through for Script Preview & Edit
+            content_params = render_content_input(pixelle_video)
             
             # BGM selection (bgm_path, bgm_volume)
             bgm_params = render_bgm_section()
