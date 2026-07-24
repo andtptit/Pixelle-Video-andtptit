@@ -34,13 +34,23 @@ def run_async(coro):
         try:
             return loop.run_until_complete(coro)
         finally:
-            try:
-                from pixelle_video.services.frame_html import HTMLFrameGenerator
-
-                loop.run_until_complete(HTMLFrameGenerator.close_browser())
-            except Exception as e:
-                logger.debug(f"Failed to cleanup HTML frame browser before loop close: {e}")
+            # [PIXELLE-CUSTOM] Do NOT close the shared HTMLFrameGenerator
+            # browser here. Streamlit runs each session in its own thread,
+            # so run_async() calls from different sessions/reruns (e.g. a
+            # page reload firing some unrelated async call) can overlap in
+            # wall-clock time. The browser is a *process-wide* singleton
+            # (HTMLFrameGenerator._browser); closing it here mid-flight was
+            # yanking it out from under a still-running video generation in
+            # another thread, crashing that task with
+            # "TargetClosedError: ... browser has been closed" (confirmed
+            # by reproducing: F5 during Quick Create generation reliably
+            # killed the in-progress task). HTMLFrameGenerator._ensure_browser()
+            # already detects a stale/cross-loop browser and recreates it
+            # lazily and safely, so an explicit close-after-every-call here
+            # is both redundant and unsafe. The browser now simply lives for
+            # the lifetime of the server process.
             loop.close()
+            # [/PIXELLE-CUSTOM]
     return asyncio.run(coro)
 
 

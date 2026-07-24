@@ -159,3 +159,17 @@ class LinearVideoPipeline(BasePipeline):
     async def handle_exception(self, ctx: PipelineContext, error: Exception):
         """Handle exceptions during pipeline execution."""
         logger.error(f"Pipeline execution failed: {error}")
+
+        # [PIXELLE-CUSTOM] Persist a "failed" status (with error message) so a
+        # mid-run crash is visible in History instead of the task silently
+        # disappearing (it would otherwise never get a metadata file at all,
+        # since finalize() — the only place that used to write one — never
+        # runs on failure).
+        if ctx.task_id:
+            persistence = getattr(getattr(self, "core", None), "persistence", None)
+            if persistence:
+                try:
+                    await persistence.update_task_status(ctx.task_id, "failed", error=str(error))
+                except Exception as persist_err:
+                    logger.debug(f"Failed to persist 'failed' status for {ctx.task_id}: {persist_err}")
+        # [/PIXELLE-CUSTOM]

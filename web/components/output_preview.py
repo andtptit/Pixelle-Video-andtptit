@@ -15,6 +15,7 @@ Output preview components for web UI (right column)
 """
 
 import base64
+import json
 import os
 from pathlib import Path
 
@@ -22,9 +23,125 @@ import streamlit as st
 from loguru import logger
 
 from web.i18n import tr, get_language
-from web.utils.async_helpers import run_async
 from pixelle_video.models.progress import ProgressEvent
 from pixelle_video.config import config_manager
+
+
+# [PIXELLE-CUSTOM] Background generation + a self-refreshing "Active Tasks"
+# panel. Generation used to run as a single blocking `run_async()` call
+# inside this button's script run — meaning it died the moment the user
+# reloaded the page, switched to another page (e.g. History), or otherwise
+# caused Streamlit to abandon this script run (Streamlit always stops the
+# currently running script for a session before starting a new one; this is
+# not something a try/except here can catch). It also meant the user could
+# not start a second video while the first was still generating.
+#
+# Now the pipeline coroutine is handed to a background thread with its own
+# event loop (pixelle_video.services.task_manager.run_in_background), fully
+# decoupled from this script's lifecycle. Progress is written to a small
+# per-task `progress.json` sidecar file (since a background thread must not
+# touch `st.*` widgets directly — Streamlit's rendering is not thread-safe
+# across threads other than the one running the current script). This
+# function polls that file + the task's metadata.json (already written as
+# "running"/"completed"/"failed", see standard.py/linear.py) from
+# st.session_state["pv_active_tasks"], which survives page reloads because
+# Streamlit session_state persists across a same-session reconnect.
+def _format_progress_message(progress_data: dict) -> str:
+    event_type = progress_data.get("event_type", "")
+    if not event_type:
+        return tr("progress.starting")
+    if event_type == "frame_step":
+        action_text = tr(f"progress.step_{progress_data.get('action')}")
+        message = tr(
+            "progress.frame_step",
+            current=progress_data.get("frame_current"),
+            total=progress_data.get("frame_total"),
+            step=progress_data.get("step"),
+            action=action_text,
+        )
+    elif event_type == "processing_frame":
+        message = tr(
+            "progress.frame",
+            current=progress_data.get("frame_current"),
+            total=progress_data.get("frame_total"),
+        )
+    else:
+        message = tr(f"progress.{event_type}")
+    if progress_data.get("extra_info"):
+        message = f"{message} - {progress_data['extra_info']}"
+    return message
+
+
+def _load_task_metadata(task_id: str):
+    from pixelle_video.utils.os_util import get_output_path
+    meta_path = os.path.join(get_output_path(task_id), "metadata.json")
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+@st.fragment(run_every="2s")
+def render_active_tasks_panel(pixelle_video):
+    """Self-refreshing panel: shows every task the user submitted this
+    session, independent of page reloads/navigation, without blocking the
+    rest of the page (a Streamlit fragment reruns on its own schedule).
+
+    Reload testing showed st.session_state["pv_active_tasks"] does not
+    reliably survive every reload/reconnect in practice, so this also
+    rediscovers any on-disk task still marked "running" (persisted by
+    setup_environment) and merges it in — belt and suspenders, since the
+    background thread itself is already fully independent of session_state
+    either way."""
+    from pixelle_video.services.task_manager import load_task_progress
+    from web.utils.async_helpers import run_async
+
+    active = list(st.session_state.get("pv_active_tasks", []))
+    try:
+        running = run_async(pixelle_video.history.get_task_list(
+            page=1, page_size=50, status="running",
+        ))
+        for t in running.get("tasks", []):
+            if t["task_id"] not in active:
+                active.append(t["task_id"])
+    except Exception as e:
+        logger.debug(f"Failed to rediscover running tasks: {e}")
+
+    if not active:
+        return
+
+    st.markdown(f"**{tr('task.active_panel_title')}**")
+    still_active = []
+    for task_id in active:
+        metadata = _load_task_metadata(task_id)
+        status = (metadata or {}).get("status", "running")
+        title = (metadata or {}).get("input", {}).get("title") or task_id
+
+        with st.container(border=True):
+            dismissed = False
+            if status == "completed":
+                st.success(f"✅ {title}")
+                video_path = (metadata.get("result") or {}).get("video_path")
+                if video_path and os.path.exists(video_path):
+                    st.video(video_path)
+                dismissed = st.button(tr("task.dismiss"), key=f"pv_dismiss_{task_id}")
+            elif status == "failed":
+                st.error(f"❌ {title}: {metadata.get('error', '')}")
+                dismissed = st.button(tr("task.dismiss"), key=f"pv_dismiss_{task_id}")
+            else:
+                progress_data = load_task_progress(task_id) or {}
+                st.markdown(f"⏳ **{title}**")
+                st.progress(min(progress_data.get("progress", 0.0), 0.99))
+                st.caption(_format_progress_message(progress_data))
+
+            if not dismissed:
+                still_active.append(task_id)
+
+    st.session_state["pv_active_tasks"] = still_active
+# [/PIXELLE-CUSTOM]
 
 
 def render_output_preview(pixelle_video, video_params):
@@ -80,7 +197,7 @@ def render_single_output(pixelle_video, video_params):
             if not config_manager.validate():
                 st.error(tr("settings.not_configured"))
                 st.stop()
-            
+
             # Validate input
             if not text:
                 st.error(tr("error.input_required"))
@@ -100,141 +217,77 @@ def render_single_output(pixelle_video, video_params):
                     else "Please select a video workflow or API video model before generating."
                 )
                 st.stop()
-            
-            # Show progress
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Record start time for generation
-            import time
-            start_time = time.time()
-            
-            try:
-                # Progress callback to update UI
-                def update_progress(event: ProgressEvent):
-                    """Update progress bar and status text from ProgressEvent"""
-                    # Translate event to user-facing message
-                    if event.event_type == "frame_step":
-                        # Frame step: "分镜 3/5 - 步骤 2/4: 生成插图"
-                        action_key = f"progress.step_{event.action}"
-                        action_text = tr(action_key)
-                        message = tr(
-                            "progress.frame_step",
-                            current=event.frame_current,
-                            total=event.frame_total,
-                            step=event.step,
-                            action=action_text
-                        )
-                    elif event.event_type == "processing_frame":
-                        # Processing frame: "分镜 3/5"
-                        message = tr(
-                            "progress.frame",
-                            current=event.frame_current,
-                            total=event.frame_total
-                        )
-                    else:
-                        # Simple events: use i18n key directly
-                        message = tr(f"progress.{event.event_type}")
-                    
-                    # Append extra_info if available (e.g., batch progress)
-                    if event.extra_info:
-                        message = f"{message} - {event.extra_info}"
-                    
-                    status_text.text(message)
-                    progress_bar.progress(min(int(event.progress * 100), 99))  # Cap at 99% until complete
-                
-                # Generate video (directly pass parameters)
-                # Note: media_width and media_height are auto-determined from template
-                video_params = {
-                    "text": text,
-                    "mode": mode,
-                    "title": title if title else None,
-                    "n_scenes": n_scenes,
-                    "split_mode": split_mode,
-                    "media_workflow": workflow_key,
-                    "api_video_params": api_video_params,
-                    "frame_template": frame_template,
-                    "prompt_prefix": prompt_prefix,
-                    "bgm_path": bgm_path,
-                    "bgm_volume": bgm_volume if bgm_path else 0.2,
-                    "progress_callback": update_progress,
-                    "media_width": st.session_state.get('template_media_width'),
-                    "media_height": st.session_state.get('template_media_height'),
-                }
-                # [PIXELLE-CUSTOM] Remix mode: pass through reused narrations/source frames
-                if mode == "remix":
-                    video_params["remix_narrations"] = original_params.get("remix_narrations")
-                    video_params["remix_source_frames"] = original_params.get("remix_source_frames")
-                # [/PIXELLE-CUSTOM]
-                # Add TTS parameters based on mode
-                video_params["tts_inference_mode"] = tts_mode
-                if tts_mode == "local":
-                    video_params["tts_voice"] = selected_voice
-                    video_params["tts_speed"] = tts_speed
-                else:  # comfyui
-                    video_params["tts_workflow"] = tts_workflow_key
-                    if ref_audio_path:
-                        video_params["ref_audio"] = str(ref_audio_path)
-                
-                # Add custom template parameters if any
-                if custom_values_for_video:
-                    video_params["template_params"] = custom_values_for_video
-                
-                result = run_async(pixelle_video.generate_video(**video_params))
-                
-                # Calculate total generation time
-                total_generation_time = time.time() - start_time
-                
-                progress_bar.progress(100)
-                status_text.text(tr("status.success"))
-                
-                # Display success message
-                st.success(tr("status.video_generated", path=result.video_path))
-                
-                st.markdown("---")
-                
-                # Video information (compact display)
-                file_size_mb = result.file_size / (1024 * 1024)
-                
-                # Parse video size from template path
-                from pixelle_video.utils.template_util import parse_template_size, resolve_template_path
-                template_path = resolve_template_path(result.storyboard.config.frame_template)
-                video_width, video_height = parse_template_size(template_path)
-                
-                info_text = (
-                    f"⏱️ {tr('info.generation_time')} {total_generation_time:.1f}s   "
-                    f"📦 {file_size_mb:.2f}MB   "
-                    f"🎬 {len(result.storyboard.frames)}{tr('info.scenes_unit')}   "
-                    f"📐 {video_width}x{video_height}"
+
+            # [PIXELLE-CUSTOM] Submit to a background thread instead of
+            # blocking this script run — see the big comment above
+            # render_active_tasks_panel() for why.
+            from pixelle_video.utils.os_util import create_task_id
+            from pixelle_video.services.task_manager import run_in_background, save_task_progress
+
+            task_id = create_task_id()
+
+            def progress_callback(event: ProgressEvent, _task_id=task_id):
+                save_task_progress(
+                    _task_id,
+                    progress=event.progress,
+                    event_type=event.event_type,
+                    frame_current=event.frame_current,
+                    frame_total=event.frame_total,
+                    step=event.step,
+                    action=event.action,
+                    extra_info=event.extra_info,
                 )
-                st.caption(info_text)
-                
-                st.markdown("---")
-                
-                # Video preview
-                if os.path.exists(result.video_path):
-                    st.video(result.video_path)
-                    
-                    # Download button
-                    with open(result.video_path, "rb") as video_file:
-                        video_bytes = video_file.read()
-                        video_filename = os.path.basename(result.video_path)
-                        st.download_button(
-                            label="⬇️ 下载视频" if get_language() == "zh_CN" else "⬇️ Download Video",
-                            data=video_bytes,
-                            file_name=video_filename,
-                            mime="video/mp4",
-                            use_container_width=True
-                        )
-                else:
-                    st.error(tr("status.video_not_found", path=result.video_path))
-                
-            except Exception as e:
-                status_text.text("")
-                progress_bar.empty()
-                st.error(tr("status.error", error=str(e)))
-                logger.exception(e)
-                st.stop()
+
+            # Note: media_width and media_height are auto-determined from template
+            gen_kwargs = {
+                "text": text,
+                "mode": mode,
+                "title": title if title else None,
+                "n_scenes": n_scenes,
+                "split_mode": split_mode,
+                "media_workflow": workflow_key,
+                "api_video_params": api_video_params,
+                "frame_template": frame_template,
+                "prompt_prefix": prompt_prefix,
+                "bgm_path": bgm_path,
+                "bgm_volume": bgm_volume if bgm_path else 0.2,
+                "progress_callback": progress_callback,
+                "media_width": st.session_state.get('template_media_width'),
+                "media_height": st.session_state.get('template_media_height'),
+                "task_id": task_id,
+            }
+            if mode == "remix":
+                gen_kwargs["remix_narrations"] = original_params.get("remix_narrations")
+                gen_kwargs["remix_source_frames"] = original_params.get("remix_source_frames")
+            gen_kwargs["tts_inference_mode"] = tts_mode
+            if tts_mode == "local":
+                gen_kwargs["tts_voice"] = selected_voice
+                gen_kwargs["tts_speed"] = tts_speed
+            else:  # comfyui
+                gen_kwargs["tts_workflow"] = tts_workflow_key
+                if ref_audio_path:
+                    gen_kwargs["ref_audio"] = str(ref_audio_path)
+            if custom_values_for_video:
+                gen_kwargs["template_params"] = custom_values_for_video
+
+            def _coro_factory(kwargs=gen_kwargs):
+                return pixelle_video.generate_video(**kwargs)
+
+            run_in_background(_coro_factory, name=f"pixelle-gen-{task_id}")
+
+            active_tasks = st.session_state.setdefault("pv_active_tasks", [])
+            if task_id not in active_tasks:
+                active_tasks.append(task_id)
+
+            st.success(tr("task.submitted"))
+            st.rerun()
+            # [/PIXELLE-CUSTOM]
+
+    # [PIXELLE-CUSTOM] Live status for every task submitted this session —
+    # keeps working across page reloads/navigation and while other tasks
+    # are started, since generation no longer blocks this script.
+    render_active_tasks_panel(pixelle_video)
+    # [/PIXELLE-CUSTOM]
 
 
 def render_batch_output(pixelle_video, video_params):

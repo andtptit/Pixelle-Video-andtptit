@@ -84,13 +84,35 @@ class StandardPipeline(LinearVideoPipeline):
         logger.info(f"   Text length: {len(text)} chars")
         
         # Create isolated task directory
-        task_dir, task_id = create_task_output_dir()
+        # [PIXELLE-CUSTOM] Accept a pre-supplied task_id so the caller (web
+        # layer) knows the task_id *before* submitting this coroutine to a
+        # background thread, letting it track/poll the task immediately.
+        task_dir, task_id = create_task_output_dir(task_id=ctx.params.get("task_id"))
+        # [/PIXELLE-CUSTOM]
         ctx.task_id = task_id
         ctx.task_dir = task_dir
         
         logger.info(f"📁 Task directory created: {task_dir}")
         logger.info(f"   Task ID: {task_id}")
-        
+
+        # [PIXELLE-CUSTOM] Persist a "running" status record immediately so the
+        # task shows up in History (with an Open Folder button) while still in
+        # progress, instead of only appearing after finalize() succeeds. This
+        # also means a mid-run crash (e.g. the F5-during-generation Playwright
+        # browser race, now fixed separately) leaves a visible "failed" record
+        # via LinearVideoPipeline.handle_exception rather than the task
+        # silently vanishing without a trace.
+        try:
+            await self.core.persistence.save_task_metadata(task_id, {
+                "task_id": task_id,
+                "created_at": datetime.now().isoformat(),
+                "status": "running",
+                "input": {**ctx.params, "text": text},
+            })
+        except Exception as e:
+            logger.debug(f"Failed to persist initial 'running' status for {task_id}: {e}")
+        # [/PIXELLE-CUSTOM]
+
         # Determine final video path
         output_path = ctx.params.get("output_path")
         if output_path is None:

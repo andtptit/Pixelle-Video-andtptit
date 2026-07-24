@@ -51,6 +51,40 @@ async def _load_remix_source(pixelle_video, task_id: str):
     return await pixelle_video.history.get_task_detail(task_id)
 
 
+async def _rewrite_remix_narrations(pixelle_video, narrations: list, instruction: str) -> list:
+    """Rewrite narrations in a different angle/tone while keeping the exact
+    same line count and staying on-topic per line, since each line stays
+    paired with a fixed, already-generated image/video by index."""
+    from pixelle_video.utils.content_generators import _parse_json
+
+    n = len(narrations)
+    numbered = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(narrations))
+    direction = instruction.strip() if instruction and instruction.strip() else (
+        "một cách diễn đạt/giọng văn khác, mới mẻ hơn"
+    )
+    prompt = f"""Dưới đây là kịch bản gồm {n} câu thoại cho 1 video ngắn, mỗi câu ứng với 1 cảnh đã có sẵn hình ảnh/video minh họa (không thể đổi cảnh hay thứ tự):
+
+{numbered}
+
+Hãy viết lại TOÀN BỘ {n} câu theo hướng: {direction}.
+
+Yêu cầu bắt buộc:
+- Giữ ĐÚNG {n} câu, không thêm/bớt dòng nào.
+- Mỗi câu mới vẫn phải mô tả/phù hợp với chủ đề của câu gốc ở đúng vị trí tương ứng (vì hình ảnh của cảnh đó không đổi).
+- Chỉ đổi cách diễn đạt/giọng văn/góc nhìn, không đổi chủ thể của từng cảnh.
+
+Trả về JSON đúng định dạng: {{"narrations": ["câu 1", "câu 2", ...]}} với đúng {n} phần tử, không kèm chữ nào khác ngoài JSON."""
+
+    response = await pixelle_video.llm(prompt=prompt, temperature=0.9, max_tokens=2000)
+    result = _parse_json(response)
+    new_narrations = result.get("narrations") or []
+    if len(new_narrations) != n:
+        raise ValueError(
+            f"Model trả về {len(new_narrations)} câu, cần đúng {n} câu — thử lại hoặc chỉnh sửa tay."
+        )
+    return new_narrations
+
+
 def _render_remix_section(pixelle_video) -> dict:
     st.caption(tr("remix.hint"))
 
@@ -88,26 +122,91 @@ def _render_remix_section(pixelle_video) -> dict:
                 }
                 for f in storyboard.frames
             ]
-            st.session_state.pop("remix_narrations_input", None)
             st.session_state["remix_narrations_default"] = [f.narration for f in storyboard.frames]
+            # [PIXELLE-CUSTOM] Bump the widget-key version so the title/narration
+            # widgets below are recreated fresh with the new value=... Streamlit
+            # keeps a widget's *frontend* value pinned to its key across reruns
+            # (that's how in-progress edits survive a rerun), so re-popping the
+            # same key does NOT force a refresh — st.rerun() re-syncs the stale
+            # browser value straight back into session_state before our code
+            # even runs. Changing the key is the only reliable way to force a
+            # widget to pick up a new value= programmatically.
+            st.session_state["remix_version"] = st.session_state.get("remix_version", 0) + 1
+            # [/PIXELLE-CUSTOM]
 
     if st.session_state.get("remix_loaded_task_id") and st.session_state.get("remix_source_frames"):
-        n_scenes = len(st.session_state["remix_source_frames"])
+        source_frames = st.session_state["remix_source_frames"]
+        n_scenes = len(source_frames)
+        version = st.session_state.get("remix_version", 0)  # [PIXELLE-CUSTOM]
+
+        # [PIXELLE-CUSTOM] Show the loaded scenes (thumbnail + narration) so the
+        # user can see exactly what media each narration line is paired with.
+        st.markdown(f"**{tr('remix.scenes_preview_title', n=n_scenes)}**")
+        default_narrations = st.session_state.get("remix_narrations_default", [])
+        cols_per_row = 4
+        for row_start in range(0, n_scenes, cols_per_row):
+            row_frames = list(enumerate(source_frames))[row_start:row_start + cols_per_row]
+            cols = st.columns(len(row_frames))
+            for col, (i, frame) in zip(cols, row_frames):
+                with col:
+                    media_path = frame.get("video_path") if frame.get("media_type") == "video" else frame.get("image_path")
+                    try:
+                        if frame.get("media_type") == "video" and media_path:
+                            st.video(media_path)
+                        elif media_path:
+                            st.image(media_path, use_container_width=True)
+                        else:
+                            st.caption(tr("remix.no_media"))
+                    except Exception:
+                        st.caption(tr("remix.media_load_failed"))
+                    caption = default_narrations[i][:40] + "..." if i < len(default_narrations) and len(default_narrations[i]) > 40 else (default_narrations[i] if i < len(default_narrations) else "")
+                    st.caption(f"**#{i + 1}** {caption}")
+        # [/PIXELLE-CUSTOM]
+
+        title_key = f"remix_title_input_{version}"  # [PIXELLE-CUSTOM]
         st.text_input(
             tr("script_preview.title_label"),
             value=st.session_state.get("remix_title", ""),
-            key="remix_title_input",
+            key=title_key,
         )
+
+        # [PIXELLE-CUSTOM] Rewrite button — ask the LLM to rewrite the narration
+        # in a different angle/tone while keeping the exact same scene count,
+        # so the reused images/videos still line up 1:1 with each line.
+        rewrite_instruction = st.text_input(
+            tr("remix.rewrite_instruction_label"),
+            placeholder=tr("remix.rewrite_instruction_placeholder"),
+            key="remix_rewrite_instruction",
+        )
+        narration_key = f"remix_narrations_input_{version}"
+        if st.button(tr("remix.rewrite_button"), key="remix_rewrite_btn", use_container_width=True):
+            current_text = st.session_state.get(narration_key) or "\n".join(default_narrations)
+            current_lines = [line.strip() for line in current_text.split("\n") if line.strip()]
+            with st.spinner(tr("remix.rewriting")):
+                try:
+                    rewritten = run_async(
+                        _rewrite_remix_narrations(pixelle_video, current_lines, rewrite_instruction)
+                    )
+                    st.session_state["remix_narrations_default"] = rewritten
+                    # Bump version so the text_area below is a *new* widget on
+                    # rerun and actually picks up `rewritten` as its value=.
+                    st.session_state["remix_version"] = version + 1
+                    st.success(tr("remix.rewrite_success"))
+                    st.rerun()
+                except Exception as e:
+                    st.error(tr("remix.rewrite_failed", error=str(e)))
+        # [/PIXELLE-CUSTOM]
+
         st.text_area(
             tr("remix.narration_label"),
             value="\n".join(st.session_state.get("remix_narrations_default", [])),
             height=250,
-            key="remix_narrations_input",
+            key=narration_key,
             help=tr("remix.narration_help"),
         )
         edited_lines = [
             line.strip() for line in
-            st.session_state.get("remix_narrations_input", "").split("\n")
+            st.session_state.get(narration_key, "").split("\n")
             if line.strip()
         ]
         if len(edited_lines) != n_scenes:
@@ -117,7 +216,7 @@ def _render_remix_section(pixelle_video) -> dict:
             "batch_mode": False,
             "mode": "remix",
             "text": "\n".join(edited_lines),
-            "title": st.session_state.get("remix_title_input", ""),
+            "title": st.session_state.get(title_key, ""),
             "n_scenes": n_scenes,
             "split_mode": "paragraph",
             "remix_narrations": edited_lines if len(edited_lines) == n_scenes else None,

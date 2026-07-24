@@ -14,6 +14,9 @@
 History Page - View generation history and manage tasks
 """
 
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -81,6 +84,86 @@ def truncate_text(text: str, max_length: int = 60) -> str:
     if len(text) <= max_length:
         return text
     return text[:max_length] + "..."
+
+
+# [PIXELLE-CUSTOM] Open a task's output folder in the OS file explorer. This
+# runs server-side (opens the folder on the machine hosting Pixelle-Video),
+# which matches this app's local/single-user deployment model — same as
+# MoneyPrinterTurbo's "open folder" button.
+def open_task_folder(task_id: str) -> bool:
+    from pixelle_video.utils.os_util import get_output_path
+
+    folder_path = get_output_path(task_id)
+    if not os.path.isdir(folder_path):
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(folder_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", folder_path])
+        else:
+            subprocess.Popen(["xdg-open", folder_path])
+        return True
+    except Exception as e:
+        logger.error(f"Failed to open task folder {folder_path}: {e}")
+        return False
+# [/PIXELLE-CUSTOM]
+
+
+# [PIXELLE-CUSTOM] Orphaned output folders — task directories under output/
+# with no metadata.json (e.g. crashed before any status was ever persisted,
+# such as tasks generated before the running/failed status tracking above
+# existed). These are invisible to get_task_list()/get_statistics(), so they
+# never show up as History cards and can't be deleted from the UI. Scan for
+# them directly on disk and offer a way to inspect + delete them.
+_TASK_ID_PATTERN = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{4}$")
+
+
+def _dir_size_bytes(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def scan_orphaned_folders() -> list:
+    """Find output/ subfolders that look like task dirs but have no metadata.json."""
+    from pixelle_video.utils.os_util import get_output_path
+
+    output_root = get_output_path()
+    orphans = []
+    if not os.path.isdir(output_root):
+        return orphans
+
+    for name in sorted(os.listdir(output_root)):
+        full_path = os.path.join(output_root, name)
+        if not os.path.isdir(full_path) or not _TASK_ID_PATTERN.match(name):
+            continue
+        if os.path.exists(os.path.join(full_path, "metadata.json")):
+            continue
+        has_video = os.path.exists(os.path.join(full_path, "final.mp4"))
+        orphans.append({
+            "name": name,
+            "path": full_path,
+            "size_bytes": _dir_size_bytes(full_path),
+            "mtime": datetime.fromtimestamp(os.path.getmtime(full_path)),
+            "has_video": has_video,
+        })
+    return orphans
+
+
+def delete_orphaned_folder(path: str) -> bool:
+    try:
+        shutil.rmtree(path)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to delete orphaned folder {path}: {e}")
+        return False
+# [/PIXELLE-CUSTOM]
 
 
 def render_sidebar_controls(pixelle_video):
@@ -209,14 +292,14 @@ def render_grid_task_card(task: dict, pixelle_video):
         # Meta info (one line)
         st.caption(f"🕒 {format_datetime(created_at)} | ⏱️ {format_duration(duration)} | 🎬 {n_frames}")
         
-        # Action buttons (compact, 3 columns)
-        col1, col2, col3 = st.columns(3)
-        
+        # Action buttons (compact, 4 columns)
+        col1, col2, col3, col4 = st.columns(4)
+
         with col1:
             if st.button("👁️", key=f"view_{task_id}", help=tr("history.task_card.view_detail"), use_container_width=True):
                 st.session_state[f"detail_{task_id}"] = True
                 st.rerun()
-        
+
         with col2:
             if video_path and os.path.exists(video_path):
                 with open(video_path, "rb") as f:
@@ -231,8 +314,17 @@ def render_grid_task_card(task: dict, pixelle_video):
                     )
             else:
                 st.button("⬇️", key=f"download_disabled_{task_id}", disabled=True, use_container_width=True)
-        
+
         with col3:
+            # [PIXELLE-CUSTOM] Open task folder (server-side file explorer)
+            if st.button("📂", key=f"openfolder_{task_id}", help=tr("history.task_card.open_folder"), use_container_width=True):
+                if open_task_folder(task_id):
+                    st.toast(tr("history.task_card.open_folder_success"))
+                else:
+                    st.toast(tr("history.task_card.open_folder_failed"), icon="⚠️")
+            # [/PIXELLE-CUSTOM]
+
+        with col4:
             if st.button("🗑️", key=f"delete_{task_id}", help=tr("history.task_card.delete"), use_container_width=True):
                 st.session_state[f"confirm_delete_{task_id}"] = True
                 st.rerun()
@@ -386,7 +478,55 @@ def main():
     
     # Sidebar: Statistics + Filters
     filter_status, sort_by, sort_order, page_size = render_sidebar_controls(pixelle_video)
-    
+
+    # [PIXELLE-CUSTOM] Orphaned folders panel — task dirs with no metadata.json,
+    # invisible to the normal task list below. Lets the user inspect and
+    # clean them up (e.g. leftovers from a crash that happened before any
+    # status was ever persisted).
+    orphans = scan_orphaned_folders()
+    if orphans:
+        with st.expander(f"🗂️ {tr('history.orphans.title', n=len(orphans))}", expanded=False):
+            st.caption(tr("history.orphans.hint"))
+
+            if st.button(tr("history.orphans.delete_all"), key="delete_all_orphans"):
+                st.session_state["confirm_delete_all_orphans"] = True
+                st.rerun()
+
+            if st.session_state.get("confirm_delete_all_orphans"):
+                st.warning(tr("history.orphans.confirm_delete_all", n=len(orphans)))
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button(tr("history.orphans.confirm_yes"), key="confirm_delete_all_orphans_yes", use_container_width=True):
+                        deleted = sum(1 for o in orphans if delete_orphaned_folder(o["path"]))
+                        st.session_state["confirm_delete_all_orphans"] = False
+                        st.success(tr("history.orphans.delete_all_success", n=deleted))
+                        st.rerun()
+                with col_no:
+                    if st.button(tr("history.orphans.confirm_no"), key="confirm_delete_all_orphans_no", use_container_width=True):
+                        st.session_state["confirm_delete_all_orphans"] = False
+                        st.rerun()
+
+            st.divider()
+
+            for orphan in orphans:
+                col_name, col_info, col_open, col_delete = st.columns([3, 2, 1, 1])
+                with col_name:
+                    video_hint = "🎬" if orphan["has_video"] else "❔"
+                    st.markdown(f"{video_hint} `{orphan['name']}`")
+                with col_info:
+                    st.caption(f"{format_file_size(orphan['size_bytes'])} · {orphan['mtime'].strftime('%m-%d %H:%M')}")
+                with col_open:
+                    if st.button("📂", key=f"open_orphan_{orphan['name']}", help=tr("history.task_card.open_folder"), use_container_width=True):
+                        open_task_folder(orphan["name"])
+                with col_delete:
+                    if st.button("🗑️", key=f"delete_orphan_{orphan['name']}", use_container_width=True):
+                        if delete_orphaned_folder(orphan["path"]):
+                            st.success(tr("history.orphans.delete_one_success", name=orphan["name"]))
+                            st.rerun()
+                        else:
+                            st.error(tr("history.orphans.delete_one_failed", name=orphan["name"]))
+    # [/PIXELLE-CUSTOM]
+
     # Initialize pagination in session state
     if "history_page" not in st.session_state:
         st.session_state.history_page = 1
