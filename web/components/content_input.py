@@ -318,7 +318,8 @@ def render_content_input(pixelle_video=None):
                     max_value=30,
                     value=5,
                     help=tr("video.frames_help"),
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    key="std_n_scenes"  # [PIXELLE-CUSTOM] targetable by Channel Preset
                 )
                 st.caption(tr("video.frames_label", n=n_scenes))
             else:

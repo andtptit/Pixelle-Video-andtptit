@@ -32,6 +32,7 @@ from web.state.session import init_session_state, init_i18n, get_pixelle_video
 from web.components.header import render_header
 from web.components.settings import render_advanced_settings
 from web.components.faq import render_faq_sidebar
+from web.components.channel_preset import apply_pending_channel_preset  # [PIXELLE-CUSTOM]
 
 # Page config
 st.set_page_config(
@@ -47,7 +48,12 @@ def main():
     # Initialize session state and i18n
     init_session_state()
     init_i18n()
-    
+
+    # [PIXELLE-CUSTOM] Must run before ANY widget on this page (any column/section)
+    # so a "Load Preset" click can safely prefill session_state before the
+    # target widgets are instantiated in this run (see channel_preset.py).
+    apply_pending_channel_preset()
+
     # Render header (title + language selector)
     render_header()
     

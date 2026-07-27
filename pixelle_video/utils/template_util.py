@@ -24,7 +24,8 @@ from pixelle_video.utils.os_util import (
     get_resource_path,
     list_resource_files,
     list_resource_dirs,
-    resource_exists
+    resource_exists,
+    get_data_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -499,3 +500,47 @@ def get_templates_grouped_by_size_and_type(
     
     return sorted_grouped
 
+
+
+# ==================== [PIXELLE-CUSTOM] Template Edit/Delete (custom-tier only) ====================
+#
+# Edit/Delete always operate on the *custom override* tier (data/templates/...),
+# never on the bundled default templates shipped with the repo (templates/...).
+# This mirrors get_resource_path()'s existing "custom overrides default" lookup:
+# - Editing a bundled default template creates/updates its override copy.
+# - Deleting only removes the override copy (falls back to the bundled default
+#   if one exists with the same size/name, otherwise the template disappears).
+
+def get_custom_template_path(size: str, template_name: str) -> str:
+    """Path in the custom/override templates tier, regardless of whether it exists yet."""
+    return get_data_path("templates", size, template_name)
+
+
+def has_custom_template_override(size: str, template_name: str) -> bool:
+    """True if a custom override file already exists for this template."""
+    return os.path.exists(get_custom_template_path(size, template_name))
+
+
+def read_template_content(size: str, template_name: str) -> str:
+    """Read the currently-effective content (custom override if present, else default)."""
+    path = get_resource_path("templates", size, template_name)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def save_custom_template_content(size: str, template_name: str, content: str) -> str:
+    """Write HTML content to the custom/override tier. Never touches the bundled default file."""
+    path = get_custom_template_path(size, template_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+def delete_custom_template_override(size: str, template_name: str) -> bool:
+    """Delete the custom override copy only. Returns False if there was none to delete."""
+    path = get_custom_template_path(size, template_name)
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False

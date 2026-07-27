@@ -33,6 +33,7 @@ from web.pipelines.api_workflows import (
     workflow_source_label,
 )
 from pixelle_video.config import config_manager
+from web.components.channel_preset import render_channel_preset_section  # [PIXELLE-CUSTOM]
 
 
 def is_api_workflow(workflow_key: str | None) -> bool:
@@ -42,6 +43,12 @@ def is_api_workflow(workflow_key: str | None) -> bool:
 
 def render_style_config(pixelle_video):
     """Render style configuration section (middle column)"""
+    # [PIXELLE-CUSTOM] Channel Preset — must render before the widgets below so a
+    # "Load Preset" click can prefill their session_state before those widgets
+    # are (re)created in this same rerun.
+    render_channel_preset_section()
+    # [/PIXELLE-CUSTOM]
+
     # TTS Section (moved from left column)
     # ====================================================================
     with st.container(border=True):
@@ -485,8 +492,105 @@ def render_style_config(pixelle_video):
                                 ):
                                     st.session_state['selected_template'] = template.template_path
                                     st.rerun()
+
+                                # [PIXELLE-CUSTOM] Edit / Delete buttons
+                                edit_col, delete_col = st.columns(2)
+                                with edit_col:
+                                    if st.button(
+                                        tr("template.edit_button"),
+                                        key=f"template_edit_{template.template_path}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state['cp_editing_template'] = template.template_path
+                                        st.session_state.pop('cp_confirm_delete_template', None)
+                                        st.rerun()
+                                with delete_col:
+                                    if st.button(
+                                        tr("template.delete_button"),
+                                        key=f"template_delete_{template.template_path}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state['cp_confirm_delete_template'] = template.template_path
+                                        st.session_state.pop('cp_editing_template', None)
+                                        st.rerun()
+                                # [/PIXELLE-CUSTOM]
             else:
                 st.warning(tr("template.no_templates_with_preview"))
+
+            # [PIXELLE-CUSTOM] Edit panel — always writes to the custom override
+            # tier (data/templates/...), never touches the bundled default file.
+            editing_path = st.session_state.get('cp_editing_template')
+            if editing_path:
+                from pixelle_video.utils.template_util import (
+                    parse_template_size,
+                    read_template_content,
+                    save_custom_template_content,
+                    has_custom_template_override,
+                )
+                edit_size_str = f"{parse_template_size(editing_path)[0]}x{parse_template_size(editing_path)[1]}"
+                edit_name = Path(editing_path).name
+                with st.container(border=True):
+                    st.markdown(f"**{tr('template.edit_section_title', name=edit_name)}**")
+                    if has_custom_template_override(edit_size_str, edit_name):
+                        st.caption(tr("template.edit_override_note"))
+                    else:
+                        st.caption(tr("template.edit_creates_override_note"))
+                    try:
+                        current_content = read_template_content(edit_size_str, edit_name)
+                    except Exception as e:
+                        current_content = ""
+                        st.error(tr("template.edit_read_failed", error=str(e)))
+                    edited_content = st.text_area(
+                        tr("template.edit_content_label"),
+                        value=current_content,
+                        height=350,
+                        key=f"cp_edit_content_{editing_path}",
+                    )
+                    save_col, cancel_col = st.columns(2)
+                    with save_col:
+                        if st.button(tr("template.edit_save_button"), key="cp_edit_save_btn", use_container_width=True, type="primary"):
+                            try:
+                                save_custom_template_content(edit_size_str, edit_name, edited_content)
+                                st.session_state.pop('cp_editing_template', None)
+                                st.success(tr("template.edit_save_success", name=edit_name))
+                                st.rerun()
+                            except Exception as e:
+                                st.error(tr("template.edit_save_failed", error=str(e)))
+                    with cancel_col:
+                        if st.button(tr("template.edit_cancel_button"), key="cp_edit_cancel_btn", use_container_width=True):
+                            st.session_state.pop('cp_editing_template', None)
+                            st.rerun()
+
+            # Delete confirmation panel — only removes the custom override copy.
+            delete_path = st.session_state.get('cp_confirm_delete_template')
+            if delete_path:
+                from pixelle_video.utils.template_util import (
+                    parse_template_size,
+                    has_custom_template_override,
+                    delete_custom_template_override,
+                )
+                del_size_str = f"{parse_template_size(delete_path)[0]}x{parse_template_size(delete_path)[1]}"
+                del_name = Path(delete_path).name
+                with st.container(border=True):
+                    if has_custom_template_override(del_size_str, del_name):
+                        st.warning(tr("template.delete_confirm", name=del_name))
+                        confirm_col, cancel_col = st.columns(2)
+                        with confirm_col:
+                            if st.button(tr("template.delete_confirm_button"), key="cp_delete_confirm_btn", use_container_width=True, type="primary"):
+                                delete_custom_template_override(del_size_str, del_name)
+                                st.session_state.pop('cp_confirm_delete_template', None)
+                                st.success(tr("template.delete_success", name=del_name))
+                                st.rerun()
+                        with cancel_col:
+                            if st.button(tr("template.delete_cancel_button"), key="cp_delete_cancel_btn", use_container_width=True):
+                                st.session_state.pop('cp_confirm_delete_template', None)
+                                st.rerun()
+                    else:
+                        st.info(tr("template.delete_no_override", name=del_name))
+                        if st.button(tr("template.edit_cancel_button"), key="cp_delete_ack_btn"):
+                            st.session_state.pop('cp_confirm_delete_template', None)
+                            st.rerun()
+            # [/PIXELLE-CUSTOM]
             
             # Display selected template name (inside expander, below tabs)
             frame_template = st.session_state['selected_template']
@@ -850,7 +954,8 @@ def render_style_config(pixelle_video):
                 placeholder=tr("style.prompt_prefix_placeholder"),
                 height=80,
                 label_visibility="visible",
-                help=tr("style.prompt_prefix_help")
+                help=tr("style.prompt_prefix_help"),
+                key="style_prompt_prefix"  # [PIXELLE-CUSTOM] targetable by Channel Preset
             )
         
             # Media preview expander

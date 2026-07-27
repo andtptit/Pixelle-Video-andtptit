@@ -45,6 +45,8 @@ config.yaml
 config.yaml.bak
 *.yaml.bak
 .env
+.env.*
+channel_presets/
 
 # Logs
 *.log
