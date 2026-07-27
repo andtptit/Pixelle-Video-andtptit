@@ -305,7 +305,7 @@ class VideoService:
         replace_audio: bool = True,
         audio_volume: float = 1.0,
         video_volume: float = 0.0,
-        pad_strategy: str = "freeze",  # "freeze" (freeze last frame) or "black" (black screen)
+        pad_strategy: str = "freeze",  # "freeze" (freeze last frame), "black" (black screen), or "stretch" ([PIXELLE-CUSTOM] slow the video down to fill the gap, no freeze)
         auto_adjust_duration: bool = True,  # Automatically adjust video duration to match audio
         duration_tolerance: float = 0.3,  # Tolerance for video being longer than audio (seconds)
     ) -> str:
@@ -397,8 +397,22 @@ class VideoService:
         if audio_duration > video_duration:
             pad_duration = audio_duration - video_duration
             logger.info(f"Audio is longer, padding video by {pad_duration:.2f}s using '{pad_strategy}' strategy")
-            
-            if pad_strategy == "freeze":
+
+            if pad_strategy == "stretch":
+                # [PIXELLE-CUSTOM] Slow the whole clip down (setpts) so its
+                # native duration exactly matches the audio, instead of
+                # freezing the last frame to fill the gap. This matters most
+                # for Remix: the reused AI video clip has a fixed original
+                # duration, but the (re-recorded) narration for the edited
+                # script rarely matches it exactly — freeze-padding that gap
+                # produced a jarring stop-motion "stutter" at every scene cut
+                # (up to ~1.5s frozen in the worst case observed). A gentle
+                # slowdown keeps the clip in continuous motion the whole way
+                # through instead.
+                stretch_factor = audio_duration / video_duration
+                video_stream = video_stream.filter('setpts', f'{stretch_factor}*PTS')
+                logger.info(f"  → Stretching video {stretch_factor:.2f}x to fill the gap smoothly (no freeze)")
+            elif pad_strategy == "freeze":
                 # Freeze last frame: tpad filter
                 video_stream = video_stream.filter('tpad', stop_mode='clone', stop_duration=pad_duration)
             else:  # black
@@ -516,11 +530,12 @@ class VideoService:
         video: str,
         overlay_image: str,
         output: str,
-        scale_mode: str = "contain"
+        scale_mode: str = "contain",
+        fps: Optional[int] = None,
     ) -> str:
         """
         Overlay a transparent image on top of video
-        
+
         Args:
             video: Base video file path
             overlay_image: Transparent overlay image path (e.g., rendered HTML with transparent background)
@@ -529,13 +544,19 @@ class VideoService:
                 - "contain": Scale video to fit within overlay dimensions (letterbox/pillarbox)
                 - "cover": Scale video to cover overlay dimensions (may crop)
                 - "stretch": Stretch video to exact overlay dimensions
-        
+            fps: [PIXELLE-CUSTOM] Force this output frame rate. Without it, the
+                output inherits whatever fps the source AI-generated video
+                happens to have — which varies per provider call (e.g. 24 vs
+                25 vs 30fps) — so adjacent scenes ending up with slightly
+                different fps caused a ~0.1s stutter at every cut once
+                concatenated with the (copy, no re-encode) demuxer method.
+
         Returns:
             Path to the output video file
-        
+
         Raises:
             RuntimeError: If FFmpeg execution fails
-        
+
         Note:
             - Overlay image should have transparent background
             - Video is scaled to match overlay dimensions based on scale_mode
@@ -544,7 +565,7 @@ class VideoService:
         """
         self._ensure_ffmpeg()
         logger.info(f"Overlaying image on video (scale_mode={scale_mode})")
-        
+
         try:
             # Get overlay image dimensions
             overlay_probe = ffmpeg.probe(overlay_image)
@@ -576,17 +597,29 @@ class VideoService:
             else:  # stretch
                 # Stretch to exact dimensions
                 scaled_video = input_video.filter('scale', overlay_width, overlay_height)
-            
+
+            # [PIXELLE-CUSTOM] Force a fixed, constant frame rate so every
+            # scene's segment is uniform regardless of what fps the source
+            # AI video happened to come back at. See the fps note in the
+            # docstring above for why this matters for stutter-free concat.
+            if fps:
+                scaled_video = scaled_video.filter('fps', fps=fps)
+            # [/PIXELLE-CUSTOM]
+
             # Overlay the transparent image on top of the scaled video
             output_stream = ffmpeg.overlay(scaled_video, input_overlay)
-            
+
+            output_kwargs = dict(
+                vcodec='libx264',
+                pix_fmt='yuv420p',
+                preset='medium',
+                crf=23,
+            )
+            if fps:
+                output_kwargs['r'] = fps  # [PIXELLE-CUSTOM] belt-and-suspenders: also pin container fps
             (
                 ffmpeg
-                .output(output_stream, output, 
-                        vcodec='libx264',
-                        pix_fmt='yuv420p',
-                        preset='medium',
-                        crf=23)
+                .output(output_stream, output, **output_kwargs)
                 .overwrite_output()
                 .run(capture_stdout=True, capture_stderr=True)
             )
@@ -604,27 +637,31 @@ class VideoService:
         audio: str,
         output: str,
         fps: int = 30,
+        zoom_effect: bool = False,
     ) -> str:
         """
         Create video from static image and audio
-        
+
         Args:
             image: Image file path
             audio: Audio file path
             output: Output video path
             fps: Frames per second
-        
+            zoom_effect: [PIXELLE-CUSTOM] Apply a subtle Ken Burns-style zoom-out
+                (starts slightly zoomed in, eases down to 1.0x by the end of the
+                clip) instead of a fully static frame.
+
         Returns:
             Path to the output video
-        
+
         Raises:
             RuntimeError: If FFmpeg execution fails
-        
+
         Note:
             - Image is displayed as static frame for the duration of audio
             - Video duration matches audio duration
             - Useful for creating video segments from storyboard frames
-        
+
         Example:
             >>> compositor.create_video_from_image(
             ...     "frame.png",
@@ -634,18 +671,44 @@ class VideoService:
         """
         self._ensure_ffmpeg()
         logger.info("Creating video from image and audio")
-        
+
         try:
             # Get audio duration to ensure exact video duration match
             probe = ffmpeg.probe(audio)
             audio_duration = float(probe['format']['duration'])
             logger.debug(f"Audio duration: {audio_duration:.3f}s")
-            
+
             # Input image with loop (loop=1 means loop indefinitely)
             # Use framerate to set input framerate
             input_image = ffmpeg.input(image, loop=1, framerate=fps)
             input_audio = ffmpeg.input(audio)
-            
+
+            # [PIXELLE-CUSTOM] Zoom out effect (image_* templates only, opt-in
+            # from the UI). Ken Burns via ffmpeg's zoompan filter: starts at
+            # START_ZOOM, eases down to 1.0 (full frame, no crop) by the last
+            # frame of the clip, staying centered throughout.
+            if zoom_effect:
+                img_probe = ffmpeg.probe(image)
+                img_stream = next(s for s in img_probe['streams'] if s['codec_type'] == 'video')
+                width, height = img_stream['width'], img_stream['height']
+
+                start_zoom = 1.10
+                end_zoom = 1.0
+                total_frames = max(1, round(fps * audio_duration))
+                decrement = (start_zoom - end_zoom) / total_frames
+                zoom_expr = f"if(lte(on,1),{start_zoom},max({end_zoom},zoom-{decrement:.8f}))"
+
+                input_image = input_image.filter(
+                    'zoompan',
+                    z=zoom_expr,
+                    x='iw/2-(iw/zoom/2)',
+                    y='ih/2-(ih/zoom/2)',
+                    d=1,
+                    s=f'{width}x{height}',
+                    fps=fps,
+                )
+            # [/PIXELLE-CUSTOM]
+
             # Combine image and audio
             # Use -t to explicitly set video duration = audio duration
             (
@@ -944,8 +1007,31 @@ class VideoService:
         try:
             input_video = ffmpeg.input(video)
             video_stream = input_video.video
-            
-            if pad_strategy == "freeze":
+
+            if pad_strategy == "stretch":
+                # [PIXELLE-CUSTOM] Slow the clip down (setpts) to exactly fill
+                # target_duration instead of freezing/blacking out the gap.
+                # This is the function that actually runs in practice (called
+                # from merge_audio_video's auto_adjust_duration pre-pass,
+                # which is on by default) — see the longer explanation next
+                # to the mirrored logic further down in merge_audio_video.
+                stretch_factor = target_duration / video_duration
+                video_stream = video_stream.filter('setpts', f'{stretch_factor}*PTS')
+                logger.info(f"  → Stretching video {stretch_factor:.2f}x to fill the gap smoothly (no freeze)")
+
+                (
+                    ffmpeg
+                    .output(
+                        video_stream,
+                        output,
+                        vcodec='libx264',
+                        preset='fast',
+                        crf=23
+                    )
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True, quiet=True)
+                )
+            elif pad_strategy == "freeze":
                 # Freeze last frame using tpad filter
                 video_stream = video_stream.filter('tpad', stop_mode='clone', stop_duration=pad_duration)
                 

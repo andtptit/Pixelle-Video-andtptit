@@ -536,7 +536,20 @@ def render_style_config(pixelle_video):
         
         # Backward compatibility
         st.session_state['template_requires_image'] = (template_media_type == "image")
-        
+
+        # [PIXELLE-CUSTOM] Zoom out effect — only meaningful for image_*
+        # templates (a static-style template has no AI image to zoom on;
+        # a video_* template is already moving footage).
+        zoom_effect = False
+        if template_media_type == "image":
+            zoom_effect = st.checkbox(
+                tr("style.zoom_out_effect"),
+                value=False,
+                key="zoom_out_effect_checkbox",
+                help=tr("style.zoom_out_effect_help"),
+            )
+        # [/PIXELLE-CUSTOM]
+
         custom_values_for_video = {}
         if custom_params_for_video:
             st.markdown("📝 " + tr("template.custom_parameters"))
@@ -947,5 +960,6 @@ def render_style_config(pixelle_video):
         "api_video_params": api_video_params if template_media_type == "video" else None,
         "prompt_prefix": prompt_prefix if prompt_prefix else "",
         "media_width": media_width,
-        "media_height": media_height
+        "media_height": media_height,
+        "zoom_effect": zoom_effect,  # [PIXELLE-CUSTOM]
     }

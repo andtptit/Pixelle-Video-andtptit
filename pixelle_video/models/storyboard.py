@@ -54,6 +54,11 @@ class StoryboardConfig:
     frame_template: str = "1080x1920/default.html"  # Template path with size (e.g., "1080x1920/default.html")
     template_params: Optional[Dict[str, Any]] = None  # Custom template parameters (e.g., {"accent_color": "#ff0000"})
 
+    # [PIXELLE-CUSTOM] Subtle Ken Burns zoom-out for static AI-generated images
+    # (image_* templates only — ignored for static_*/video_* templates, see
+    # FrameProcessor._step_create_video_segment)
+    zoom_effect: bool = False
+
 
 @dataclass
 class StoryboardFrame:

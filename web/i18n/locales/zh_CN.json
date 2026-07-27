@@ -90,6 +90,8 @@
     "style.prompt_prefix_what": "自动添加到所有图片提示词前面，统一控制插图风格（如：卡通风格、写实风格等）",
     "style.prompt_prefix_how": "直接在下方输入框填写风格描述。若要永久保存，需编辑 config.yaml 文件",
     "style.prompt_prefix_placeholder": "输入风格前缀（留空则使用配置文件默认值）",
+    "style.zoom_out_effect": "🔍 【自定义】缩小(Zoom Out)动效",
+    "style.zoom_out_effect_help": "为每个 AI 生成的静态插图添加轻微的缩小动效（从轻微放大过渡到正常大小），仅对「生成图片」类模板生效。不勾选则效果与之前完全一样（纯静态画面）。",
     "style.prompt_prefix_help": "此文本将自动添加到所有图像生成提示词之前。要永久修改，请编辑 config.yaml",
     "style.custom": "自定义",
     "style.description": "风格描述",

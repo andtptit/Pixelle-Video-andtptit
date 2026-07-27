@@ -407,7 +407,8 @@ class FrameProcessor:
                 video=frame.video_path,
                 overlay_image=frame.composed_image_path,
                 output=temp_video_with_overlay,
-                scale_mode="contain"  # Scale video to fit template size (contain mode)
+                scale_mode="contain",  # Scale video to fit template size (contain mode)
+                fps=config.video_fps,  # [PIXELLE-CUSTOM] force uniform fps across scenes, see video.py
             )
             
             # Step 2: Add narration audio to the overlaid video
@@ -417,7 +418,8 @@ class FrameProcessor:
                 audio=frame.audio_path,
                 output=output_path,
                 replace_audio=True,  # Replace video audio with narration
-                audio_volume=1.0
+                audio_volume=1.0,
+                pad_strategy="stretch",  # [PIXELLE-CUSTOM] smooth slowdown instead of a frozen-frame stutter when the (possibly reused/Remix) video is shorter than the narration
             )
             
             # Clean up temp file
@@ -429,13 +431,20 @@ class FrameProcessor:
             # Image workflow: Use composed image directly
             # The asset_default.html template includes the image in the composition
             logger.debug(f"  → Using image-based composition")
-            
+
+            # [PIXELLE-CUSTOM] Zoom out only applies to real AI-generated image
+            # frames (frame.media_type == "image"), never to static_* templates
+            # (frame.media_type stays None for those) even if the flag is set.
+            zoom_effect = bool(getattr(config, "zoom_effect", False)) and frame.media_type == "image"
+
             segment_path = video_service.create_video_from_image(
                 image=frame.composed_image_path,
                 audio=frame.audio_path,
                 output=output_path,
-                fps=config.video_fps
+                fps=config.video_fps,
+                zoom_effect=zoom_effect,
             )
+            # [/PIXELLE-CUSTOM]
         
         else:
             raise ValueError(f"Unknown media type: {frame.media_type}")

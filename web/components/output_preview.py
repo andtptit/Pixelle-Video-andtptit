@@ -183,7 +183,8 @@ def render_single_output(pixelle_video, video_params):
     workflow_key = video_params.get("media_workflow")
     api_video_params = video_params.get("api_video_params")
     prompt_prefix = video_params.get("prompt_prefix", "")
-    
+    zoom_effect = video_params.get("zoom_effect", False)  # [PIXELLE-CUSTOM]
+
     with st.container(border=True):
         st.markdown(f"**{tr('section.video_generation')}**")
         
@@ -247,6 +248,7 @@ def render_single_output(pixelle_video, video_params):
                 "split_mode": split_mode,
                 "media_workflow": workflow_key,
                 "api_video_params": api_video_params,
+                "zoom_effect": zoom_effect,  # [PIXELLE-CUSTOM]
                 "frame_template": frame_template,
                 "prompt_prefix": prompt_prefix,
                 "bgm_path": bgm_path,

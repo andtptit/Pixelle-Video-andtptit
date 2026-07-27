@@ -90,6 +90,8 @@
     "style.prompt_prefix_what": "Automatically added before all image prompts to control the illustration style uniformly (e.g., cartoon, realistic)",
     "style.prompt_prefix_how": "Enter style description in the input box below. To save permanently, edit the config.yaml file",
     "style.prompt_prefix_placeholder": "Enter style prefix (leave empty for config default)",
+    "style.zoom_out_effect": "🔍 [Custom] Zoom out effect",
+    "style.zoom_out_effect_help": "Adds a subtle zoom-out motion to each AI-generated static illustration (starts slightly zoomed in, eases to normal size) — only applies to \"Generate Images\" templates. Leave unchecked to keep the current fully-static behavior.",
     "style.prompt_prefix_help": "This text will be automatically added before all image generation prompts. To permanently change, edit config.yaml",
     "style.custom": "Custom",
     "style.description": "Style Description",

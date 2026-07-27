@@ -303,7 +303,8 @@ class StandardPipeline(LinearVideoPipeline):
             media_workflow=ctx.params.get("media_workflow"),
             api_video_params=ctx.params.get("api_video_params"),
             frame_template=ctx.params.get("frame_template") or "1080x1920/default.html",
-            template_params=ctx.params.get("template_params")
+            template_params=ctx.params.get("template_params"),
+            zoom_effect=bool(ctx.params.get("zoom_effect", False)),  # [PIXELLE-CUSTOM]
         )
         
         # Create storyboard
@@ -456,12 +457,26 @@ class StandardPipeline(LinearVideoPipeline):
         
         storyboard = ctx.storyboard
         segment_paths = [frame.video_segment_path for frame in storyboard.frames]
-        
+
         video_service = VideoService()
-        
+
+        # [PIXELLE-CUSTOM] The fast "demuxer" concat (stream copy, no
+        # re-encode) requires every segment to share essentially identical
+        # codec parameters. image_*/static segments are synthetic (fixed fps
+        # baked in) so this always holds. video_* segments originate from an
+        # external AI provider whose returned fps can vary between calls —
+        # forcing a uniform fps per-segment (see frame_processor.py) fixes
+        # the common case, but re-encoding at concat time is a safer
+        # guarantee against the ~0.1s stutter this mismatch caused at every
+        # cut, and only costs extra time on the (already slower) video path.
+        has_video_frames = any(frame.media_type == "video" for frame in storyboard.frames)
+        concat_method = "filter" if has_video_frames else "demuxer"
+        # [/PIXELLE-CUSTOM]
+
         final_video_path = video_service.concat_videos(
             videos=segment_paths,
             output=ctx.final_video_path,
+            method=concat_method,
             bgm_path=ctx.params.get("bgm_path"),
             bgm_volume=ctx.params.get("bgm_volume", 0.2),
             bgm_mode=ctx.params.get("bgm_mode", "loop")
