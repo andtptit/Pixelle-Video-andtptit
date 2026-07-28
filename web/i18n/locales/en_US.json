@@ -25,6 +25,14 @@
     "input.text_help_fixed": "Enter complete narration script (used directly without modification)",
     "input.text_help_digital": "Enter product description. If a product description is provided, you do not need to enter the product name",
     "input.text_help_audio": "Enter prompts/descriptions, describing the desired visual content in as much detail as possible",
+    "input.narration_style_notes": "[Custom] Narration Style Notes (optional)",
+    "input.narration_style_notes_placeholder": "e.g. humorous tone, no academic citations, always open with a question, avoid the word 'imagine'",
+    "input.narration_style_notes_help": "Appended to the script-generation prompt as \"must follow\" rules. Leave empty to use the default prompt unchanged. Saved per Channel Preset.",
+    "input.enable_scene_grouping": "[Custom] Group scenes by content (reduce image cost)",
+    "input.enable_scene_grouping_help": "Let consecutive scenes that describe the same visual moment share a single AI-generated image instead of one image per scene. Only affects image-type templates. Off by default (unchanged behavior).",
+    "input.target_image_count": "[Custom] Target Image Count",
+    "input.target_image_count_help": "Desired total number of images across all scenes (a soft target — the AI keeps scenes together only when the content actually matches).",
+    "input.target_image_count_caption": "~{n} image(s) instead of one per scene",
 
     "script_preview.section_title": "📝 [Custom] Preview & Edit Script (before generating video)",
     "script_preview.hint": "Generate just the narration script first (cheap: 1 LLM call, no image/video generation cost), review or edit it, then continue — avoids wasting image/video generation cost on a script you don't like.",
@@ -38,6 +46,8 @@
     "script_preview.title_label": "Title (editable)",
     "script_preview.narration_label": "Script content (edit any line directly)",
     "script_preview.using_edited_notice": "💡 Generate Video will use exactly the content above (including your edits) — the AI will not rewrite the narration again.",
+    "script_preview.groups_title": "[Custom] Image grouping preview — {n} image(s) planned",
+    "script_preview.group_label": "Image {i} (scene {range})",
 
     "remix.enable": "🔁 [Custom] Remix a previous video (reuse its images, edit script only)",
     "remix.enable_help": "Reuse the images/videos from a video you already generated, and only lightly edit the narration wording — no new image/video generation cost, just a fresh voiceover.",

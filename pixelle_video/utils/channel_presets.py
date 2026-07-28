@@ -14,9 +14,10 @@
 [PIXELLE-CUSTOM] Channel Preset storage
 
 Minimal-scope preset: saves/loads TTS voice+speed, TTS workflow, media
-workflow (per image/video source+selection) and image prompt prefix, so
-users running multiple channels can switch between them without manually
-re-picking these settings each time.
+workflow (per image/video source+selection), image prompt prefix,
+narration style notes, and scene-grouping settings, so users running
+multiple channels can switch between them without manually re-picking
+these settings each time.
 
 Deliberately out of scope (documented limitation, not a bug):
 - Frame template (chosen via the template gallery) is NOT included.
@@ -43,6 +44,9 @@ PRESET_KEYS = [
     "standard_video_workflow_source",
     "standard_video_workflow_source_select",
     "style_prompt_prefix",
+    "narration_style_notes",
+    "enable_scene_grouping",
+    "target_image_count",
     "std_n_scenes",
     "preview_title",
     "preview_image",

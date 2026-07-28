@@ -25,6 +25,14 @@
     "input.text_help_fixed": "输入完整的旁白脚本（直接使用，不做改写）",
     "input.text_help_digital" : "输入商品介绍，若提供了商品介绍则不用再输入商品名称",
     "input.text_help_audio" : "输入提示词描述，尽可能详细的描绘想要的画面内容细节",
+    "input.narration_style_notes": "【自定义】旁白风格备注（可选）",
+    "input.narration_style_notes_placeholder": "例如：幽默的语气、不引用学术内容、每段都以提问开头、避免使用“想象一下”",
+    "input.narration_style_notes_help": "会作为“必须遵守”的规则追加到脚本生成提示词中。留空则使用默认提示词，不影响原有效果。会随 Channel Preset 一起保存。",
+    "input.enable_scene_grouping": "【自定义】按内容合并分镜（降低图片成本）",
+    "input.enable_scene_grouping_help": "让描述同一画面/情绪的连续分镜共用 1 张 AI 图片，而不是每个分镜都单独生成。仅对图片类模板生效。默认关闭（不影响原有效果）。",
+    "input.target_image_count": "【自定义】目标图片数量",
+    "input.target_image_count_help": "希望全片总共生成的图片数量（仅为参考目标——只有内容确实连贯时 AI 才会合并分镜）。",
+    "input.target_image_count_caption": "约 {n} 张图片，而非每个分镜 1 张",
 
     "script_preview.section_title": "📝 【自定义】预览与编辑脚本（生成视频前）",
     "script_preview.hint": "先只生成文案脚本（仅消耗少量 LLM token，不生成图片/视频），确认或编辑满意后再继续生成视频，避免因脚本不满意而浪费图片/视频生成费用。",
@@ -38,6 +46,8 @@
     "script_preview.title_label": "标题（可编辑）",
     "script_preview.narration_label": "脚本内容（可直接编辑每一段）",
     "script_preview.using_edited_notice": "💡 生成视频时将直接使用以上内容（含你的修改），不会再让 AI 重新改写文案。",
+    "script_preview.groups_title": "【自定义】图片分组预览 —— 预计生成 {n} 张图片",
+    "script_preview.group_label": "图片 {i}（分镜 {range}）",
 
     "remix.enable": "🔁 【自定义】复用之前的视频（复用画面，仅修改文案）",
     "remix.enable_help": "复用你已生成过的某个视频中的图片/视频，仅对文案的措辞、语气做轻微修改——不会产生新的图片/视频生成费用，只重新生成配音。",

@@ -144,7 +144,8 @@ class StandardPipeline(LinearVideoPipeline):
                 topic=text,
                 n_scenes=n_scenes,
                 min_words=min_words,
-                max_words=max_words
+                max_words=max_words,
+                extra_style_notes=ctx.params.get("narration_style_notes"),  # [PIXELLE-CUSTOM]
             )
             logger.info(f"✅ Generated {len(ctx.narrations)} narrations")
         else:  # fixed
@@ -253,6 +254,28 @@ class StandardPipeline(LinearVideoPipeline):
                     image_config["prompt_prefix"] = original_prefix
             
             logger.info(f"✅ Generated {len(ctx.image_prompts)} image prompts")
+
+            # [PIXELLE-CUSTOM] Scene grouping — image_* templates only (video_*
+            # frames each need their own generated clip; duration/timing is
+            # audio-driven per frame, so sharing doesn't apply the same way).
+            if template_type == "image" and ctx.params.get("enable_scene_grouping"):
+                target_image_count = ctx.params.get("target_image_count") or len(ctx.narrations)
+                from pixelle_video.utils.content_generators import decide_scene_image_groups
+
+                groups = await decide_scene_image_groups(
+                    self.llm,
+                    narrations=ctx.narrations,
+                    target_image_count=target_image_count,
+                )
+                ctx.image_group_leader_indices = [None] * len(ctx.narrations)
+                for group in groups:
+                    leader = group[0]
+                    for idx in group[1:]:
+                        ctx.image_group_leader_indices[idx] = leader
+                logger.info(
+                    f"🖼️ Scene grouping: {len(ctx.narrations)} scenes -> {len(groups)} image groups"
+                )
+            # [/PIXELLE-CUSTOM]
         else:
             # Static template - skip image prompt generation entirely
             ctx.image_prompts = [None] * len(ctx.narrations)
@@ -305,6 +328,8 @@ class StandardPipeline(LinearVideoPipeline):
             frame_template=ctx.params.get("frame_template") or "1080x1920/default.html",
             template_params=ctx.params.get("template_params"),
             zoom_effect=bool(ctx.params.get("zoom_effect", False)),  # [PIXELLE-CUSTOM]
+            enable_scene_grouping=bool(ctx.params.get("enable_scene_grouping", False)),  # [PIXELLE-CUSTOM]
+            target_image_count=ctx.params.get("target_image_count"),  # [PIXELLE-CUSTOM]
         )
         
         # Create storyboard
@@ -316,11 +341,19 @@ class StandardPipeline(LinearVideoPipeline):
         )
         
         # Create frames
+        group_leader_indices = ctx.image_group_leader_indices or [None] * len(ctx.narrations)
         for i, (narration, image_prompt) in enumerate(zip(ctx.narrations, ctx.image_prompts)):
+            leader_index = group_leader_indices[i] if i < len(group_leader_indices) else None
             frame = StoryboardFrame(
                 index=i,
                 narration=narration,
+                # [PIXELLE-CUSTOM] Scene grouping: keep this frame's own
+                # image_prompt even if it's a group follower — FrameProcessor
+                # tries to reuse the leader's image first, and falls back to
+                # generating independently from this prompt if the leader's
+                # image isn't available (see FrameProcessor.__call__).
                 image_prompt=image_prompt,
+                image_group_leader_index=leader_index,
                 created_at=datetime.now()
             )
             ctx.storyboard.frames.append(frame)

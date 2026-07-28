@@ -53,6 +53,10 @@ class PipelineContext:
     
     # === Visuals ===
     image_prompts: List[Optional[str]] = field(default_factory=list)
+    # [PIXELLE-CUSTOM] Scene grouping: parallel list to narrations/image_prompts.
+    # None = frame generates its own image; otherwise the index of the frame
+    # whose image this one should reuse. See content_generators.decide_scene_image_groups.
+    image_group_leader_indices: List[Optional[int]] = field(default_factory=list)
     
     # === Configuration & Storyboard ===
     config: Optional[StoryboardConfig] = None

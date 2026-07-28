@@ -23,16 +23,40 @@ from web.utils.async_helpers import get_project_version, run_async
 # [PIXELLE-CUSTOM] Script Preview & Edit — lets the user generate the narration
 # script alone (cheap: 1 LLM call, no image/video/TTS cost) and hand-edit it
 # before committing to full video generation.
-async def _generate_script_preview(pixelle_video, topic: str, n_scenes: int):
-    from pixelle_video.utils.content_generators import generate_narrations_from_topic, generate_title
+async def _generate_script_preview(
+    pixelle_video,
+    topic: str,
+    n_scenes: int,
+    narration_style_notes: str = "",
+    enable_scene_grouping: bool = False,
+    target_image_count: int | None = None,
+):
+    from pixelle_video.utils.content_generators import (
+        generate_narrations_from_topic,
+        generate_title,
+        decide_scene_image_groups,
+    )
 
     narrations = await generate_narrations_from_topic(
         pixelle_video.llm,
         topic=topic,
         n_scenes=n_scenes,
+        extra_style_notes=narration_style_notes,
     )
     title = await generate_title(pixelle_video.llm, topic, strategy="auto")
-    return narrations, title
+
+    groups = None
+    if enable_scene_grouping:
+        # Still just an LLM text call (no image/video cost) — safe to include
+        # in the cheap preview so the user can see the grouping before
+        # committing to real image generation.
+        groups = await decide_scene_image_groups(
+            pixelle_video.llm,
+            narrations=narrations,
+            target_image_count=target_image_count or n_scenes,
+        )
+
+    return narrations, title, groups
 # [/PIXELLE-CUSTOM]
 
 
@@ -327,6 +351,51 @@ def render_content_input(pixelle_video=None):
                 n_scenes = 5
                 st.info(tr("video.frames_fixed_mode_hint"))
 
+            # [PIXELLE-CUSTOM] Narration Style Notes — optional per-channel
+            # instructions appended to the narration-generation prompt (tone,
+            # structure, banned words, etc.). Empty = today's default prompt,
+            # unchanged. Saved/restored via Channel Preset (see PRESET_KEYS).
+            narration_style_notes = ""
+            if mode == "generate":
+                narration_style_notes = st.text_area(
+                    tr("input.narration_style_notes"),
+                    placeholder=tr("input.narration_style_notes_placeholder"),
+                    height=80,
+                    help=tr("input.narration_style_notes_help"),
+                    key="narration_style_notes",
+                )
+            # [/PIXELLE-CUSTOM]
+
+            # [PIXELLE-CUSTOM] Scene Grouping — let consecutive narrations share
+            # one AI-generated image (image_* templates only) to cut image
+            # generation cost on long scripts. Off by default (no behavior
+            # change). Saved/restored via Channel Preset.
+            enable_scene_grouping = False
+            target_image_count = n_scenes
+            if mode == "generate":
+                enable_scene_grouping = st.checkbox(
+                    tr("input.enable_scene_grouping"),
+                    value=False,
+                    help=tr("input.enable_scene_grouping_help"),
+                    key="enable_scene_grouping",
+                )
+                if enable_scene_grouping:
+                    # Clamp any stale stored value before the widget renders,
+                    # so shrinking n_scenes on a later run never puts the
+                    # slider's session_state value out of its new bounds.
+                    if st.session_state.get("target_image_count", n_scenes) > n_scenes:
+                        st.session_state["target_image_count"] = n_scenes
+                    target_image_count = st.slider(
+                        tr("input.target_image_count"),
+                        min_value=1,
+                        max_value=n_scenes,
+                        value=min(st.session_state.get("target_image_count", n_scenes), n_scenes),
+                        help=tr("input.target_image_count_help"),
+                        key="target_image_count",
+                    )
+                    st.caption(tr("input.target_image_count_caption", n=target_image_count))
+            # [/PIXELLE-CUSTOM]
+
             # [PIXELLE-CUSTOM] Script Preview & Edit (generate mode only) ----------
             final_mode, final_text, final_title, final_split_mode = mode, text, title, split_mode
             if mode == "generate" and pixelle_video is not None:
@@ -340,7 +409,7 @@ def render_content_input(pixelle_video=None):
                         gen_clicked = st.button(gen_label, key="sp_generate_btn", use_container_width=True)
                     with col_clear:
                         if has_preview and st.button(tr("script_preview.clear_button"), key="sp_clear_btn", use_container_width=True):
-                            for k in ("sp_narrations", "sp_title", "sp_script_input", "sp_title_input"):
+                            for k in ("sp_narrations", "sp_title", "sp_script_input", "sp_title_input", "sp_groups"):
                                 st.session_state.pop(k, None)
                             st.rerun()
 
@@ -350,11 +419,15 @@ def render_content_input(pixelle_video=None):
                         else:
                             with st.spinner(tr("script_preview.generating")):
                                 try:
-                                    narrations, gen_title = run_async(
-                                        _generate_script_preview(pixelle_video, text, n_scenes)
+                                    narrations, gen_title, groups = run_async(
+                                        _generate_script_preview(
+                                            pixelle_video, text, n_scenes, narration_style_notes,
+                                            enable_scene_grouping, target_image_count,
+                                        )
                                     )
                                     st.session_state["sp_narrations"] = narrations
                                     st.session_state["sp_title"] = gen_title
+                                    st.session_state["sp_groups"] = groups  # [PIXELLE-CUSTOM]
                                     # Drop stale widget state so the text_area/text_input
                                     # below re-initialize from the freshly generated values
                                     # instead of showing a previous (possibly edited) draft.
@@ -378,6 +451,30 @@ def render_content_input(pixelle_video=None):
                         )
                         st.caption(tr("script_preview.using_edited_notice"))
 
+                        # [PIXELLE-CUSTOM] Scene grouping breakdown — read-only
+                        # view of how the last generation grouped scenes into
+                        # images. Edit the "Narration Style Notes"/topic and hit
+                        # Regenerate if the grouping doesn't look right; there is
+                        # no manual drag-and-drop re-grouping yet.
+                        groups = st.session_state.get("sp_groups")
+                        if groups:
+                            narrations_list = st.session_state["sp_narrations"]
+                            with st.container(border=True):
+                                st.caption(tr("script_preview.groups_title", n=len(groups)))
+                                for gi, group in enumerate(groups, 1):
+                                    scene_range = (
+                                        f"{group[0] + 1}"
+                                        if len(group) == 1
+                                        else f"{group[0] + 1}-{group[-1] + 1}"
+                                    )
+                                    st.markdown(f"**🖼️ {tr('script_preview.group_label', i=gi, range=scene_range)}**")
+                                    for idx in group:
+                                        snippet = narrations_list[idx]
+                                        if len(snippet) > 60:
+                                            snippet = snippet[:60] + "..."
+                                        st.caption(f"• {snippet}")
+                        # [/PIXELLE-CUSTOM]
+
                         edited_script = st.session_state.get("sp_script_input", "")
                         if edited_script.strip():
                             # Hand off to "fixed" mode so Generate Video uses this
@@ -396,6 +493,9 @@ def render_content_input(pixelle_video=None):
                 "text": final_text,
                 "title": final_title,
                 "n_scenes": n_scenes,
+                "narration_style_notes": narration_style_notes,  # [PIXELLE-CUSTOM]
+                "enable_scene_grouping": enable_scene_grouping,  # [PIXELLE-CUSTOM]
+                "target_image_count": target_image_count,  # [PIXELLE-CUSTOM]
                 "split_mode": final_split_mode
             }
         

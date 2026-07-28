@@ -29,18 +29,24 @@ from pixelle_video.prompts.image_generation import (
 )
 from pixelle_video.prompts.style_conversion import build_style_conversion_prompt
 
+# [PIXELLE-CUSTOM] Scene grouping prompt
+from pixelle_video.prompts.scene_grouping import build_scene_grouping_prompt
+
 
 __all__ = [
     # Narration builders
     "build_topic_narration_prompt",
     "build_content_narration_prompt",
     "build_title_generation_prompt",
-    
+
     # Image builders
     "build_image_prompt_prompt",
     "build_style_conversion_prompt",
-    
+
     # Image style presets
     "IMAGE_STYLE_PRESETS",
     "DEFAULT_IMAGE_STYLE",
+
+    # [PIXELLE-CUSTOM] Scene grouping
+    "build_scene_grouping_prompt",
 ]

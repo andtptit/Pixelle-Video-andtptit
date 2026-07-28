@@ -16,6 +16,7 @@ Topic narration generation prompt
 For generating narrations from a topic/theme.
 """
 
+from typing import Optional
 
 TOPIC_NARRATION_PROMPT = """# Role Definition
 You are a professional content creation expert, skilled at expanding topics into engaging short video scripts, explaining viewpoints in an accessible way to help audiences understand complex concepts.
@@ -27,7 +28,7 @@ The user will input a topic or theme. You need to create {n_storyboard} video st
 
 # Input Topic
 {topic}
-
+{extra_style_notes_block}
 # Output Requirements
 
 ## Narration Specifications
@@ -135,24 +136,36 @@ def build_topic_narration_prompt(
     topic: str,
     n_storyboard: int,
     min_words: int,
-    max_words: int
+    max_words: int,
+    extra_style_notes: Optional[str] = None,  # [PIXELLE-CUSTOM]
 ) -> str:
     """
     Build topic narration prompt
-    
+
     Args:
         topic: Topic or theme
         n_storyboard: Number of storyboard frames
         min_words: Minimum word count
         max_words: Maximum word count
-    
+        extra_style_notes: [PIXELLE-CUSTOM] Optional channel-specific style
+            notes (tone, structure, banned words, etc.) appended as a
+            "must follow" section. Empty/None reproduces the exact default
+            prompt (no behavior change).
+
     Returns:
         Formatted prompt
     """
+    extra_style_notes_block = ""  # [PIXELLE-CUSTOM]
+    if extra_style_notes and extra_style_notes.strip():
+        extra_style_notes_block = (
+            "\n# Channel-Specific Style Notes (Must Follow)\n"
+            f"{extra_style_notes.strip()}\n"
+        )
     return TOPIC_NARRATION_PROMPT.format(
         topic=topic,
         n_storyboard=n_storyboard,
         min_words=min_words,
-        max_words=max_words
+        max_words=max_words,
+        extra_style_notes_block=extra_style_notes_block,  # [PIXELLE-CUSTOM]
     )
 

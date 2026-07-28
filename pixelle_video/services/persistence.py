@@ -348,6 +348,9 @@ class PersistenceService:
             "media_workflow": config.media_workflow,
             "frame_template": config.frame_template,
             "template_params": config.template_params,
+            "zoom_effect": config.zoom_effect,  # [PIXELLE-CUSTOM]
+            "enable_scene_grouping": config.enable_scene_grouping,  # [PIXELLE-CUSTOM]
+            "target_image_count": config.target_image_count,  # [PIXELLE-CUSTOM]
         }
     
     def _dict_to_config(self, data: Dict[str, Any]) -> StoryboardConfig:
@@ -370,6 +373,9 @@ class PersistenceService:
             media_workflow=data.get("media_workflow", data.get("image_workflow")),  # Backward compatibility
             frame_template=data.get("frame_template", "1080x1920/default.html"),
             template_params=data.get("template_params"),
+            zoom_effect=data.get("zoom_effect", False),  # [PIXELLE-CUSTOM]
+            enable_scene_grouping=data.get("enable_scene_grouping", False),  # [PIXELLE-CUSTOM]
+            target_image_count=data.get("target_image_count"),  # [PIXELLE-CUSTOM]
         )
     
     def _frame_to_dict(self, frame: StoryboardFrame) -> Dict[str, Any]:
@@ -384,10 +390,11 @@ class PersistenceService:
             "video_path": frame.video_path,
             "composed_image_path": frame.composed_image_path,
             "video_segment_path": frame.video_segment_path,
+            "image_group_leader_index": frame.image_group_leader_index,  # [PIXELLE-CUSTOM]
             "duration": frame.duration,
             "created_at": frame.created_at.isoformat() if frame.created_at else None,
         }
-    
+
     def _dict_to_frame(self, data: Dict[str, Any]) -> StoryboardFrame:
         """Convert dict to StoryboardFrame"""
         return StoryboardFrame(
@@ -400,6 +407,7 @@ class PersistenceService:
             video_path=data.get("video_path"),
             composed_image_path=data.get("composed_image_path"),
             video_segment_path=data.get("video_segment_path"),
+            image_group_leader_index=data.get("image_group_leader_index"),  # [PIXELLE-CUSTOM]
             duration=data.get("duration", 0.0),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
         )

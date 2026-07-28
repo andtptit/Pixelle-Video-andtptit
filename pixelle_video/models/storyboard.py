@@ -59,6 +59,14 @@ class StoryboardConfig:
     # FrameProcessor._step_create_video_segment)
     zoom_effect: bool = False
 
+    # [PIXELLE-CUSTOM] Scene grouping — let multiple consecutive narrations
+    # share a single AI-generated image (image_* templates only) to cut
+    # image-generation cost on long scripts. See prompts/scene_grouping.py
+    # and content_generators.decide_scene_image_groups() for the actual
+    # grouping logic + safety fallback.
+    enable_scene_grouping: bool = False
+    target_image_count: Optional[int] = None
+
 
 @dataclass
 class StoryboardFrame:
@@ -74,7 +82,14 @@ class StoryboardFrame:
     video_path: Optional[str] = None           # Original video path (for video type, before composition)
     composed_image_path: Optional[str] = None  # Composed image path (with subtitles, for image type)
     video_segment_path: Optional[str] = None   # Final video segment path
-    
+
+    # [PIXELLE-CUSTOM] Scene grouping: if set, this frame reuses the image
+    # generated for storyboard.frames[image_group_leader_index] instead of
+    # generating its own (image_prompt is set to None for such frames so the
+    # normal "has_existing_media" skip path in FrameProcessor applies).
+    # None means this frame is its own leader (generates normally).
+    image_group_leader_index: Optional[int] = None
+
     # Metadata
     duration: float = 0.0                      # Frame duration (seconds, from audio or video)
     created_at: Optional[datetime] = None

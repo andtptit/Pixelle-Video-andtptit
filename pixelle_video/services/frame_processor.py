@@ -20,6 +20,7 @@ Key Feature:
   to ensure perfect sync between audio and video (no padding, no trimming needed)
 """
 
+import asyncio
 from typing import Callable, Optional
 
 import httpx
@@ -69,13 +70,39 @@ class FrameProcessor:
             Processed frame with all paths filled
         """
         logger.info(f"Processing frame {frame.index}...")
-        
+
         frame_num = frame.index + 1
-        
+
+        # [PIXELLE-CUSTOM] Scene grouping: this frame reuses the group leader's
+        # image instead of generating its own (leader is always an earlier
+        # index, so under the default serial frame processing it has already
+        # finished; the short poll below is only a safety net for the
+        # RunningHub concurrent-processing path). If the leader's image never
+        # shows up, we fall through and generate independently from this
+        # frame's own image_prompt (never silently produces a blank frame).
+        reused_from_group = False
+        if frame.image_group_leader_index is not None and frame.image_path is None:
+            leader = storyboard.frames[frame.image_group_leader_index]
+            for _ in range(120):  # up to ~60s
+                if leader.image_path:
+                    break
+                await asyncio.sleep(0.5)
+            if leader.image_path:
+                frame.image_path = leader.image_path
+                frame.media_type = leader.media_type
+                reused_from_group = True
+                logger.debug(f"  → Frame {frame.index} reusing image from group leader {leader.index}")
+            else:
+                logger.warning(
+                    f"  → Frame {frame.index}: group leader {leader.index} image not ready after waiting; "
+                    "generating independently instead"
+                )
+        # [/PIXELLE-CUSTOM]
+
         # Determine if this frame needs image generation
         # If image_path or video_path is already set (e.g. asset-based pipeline), we consider it "has existing media" but skip generation
         has_existing_media = frame.image_path is not None or frame.video_path is not None
-        needs_generation = frame.image_prompt is not None
+        needs_generation = frame.image_prompt is not None and not reused_from_group  # [PIXELLE-CUSTOM] don't regenerate a reused image
         
         try:
             # Step 1: Generate audio (TTS)

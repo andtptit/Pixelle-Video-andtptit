@@ -19,7 +19,7 @@ These functions are reusable across different pipelines.
 
 import json
 import re
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any
 
 from loguru import logger
 
@@ -97,30 +97,34 @@ async def generate_narrations_from_topic(
     topic: str,
     n_scenes: int = 5,
     min_words: int = 5,
-    max_words: int = 20
+    max_words: int = 20,
+    extra_style_notes: Optional[str] = None,  # [PIXELLE-CUSTOM]
 ) -> List[str]:
     """
     Generate narrations from topic using LLM
-    
+
     Args:
         llm_service: LLM service instance
         topic: Topic/theme to generate narrations from
         n_scenes: Number of narrations to generate
         min_words: Minimum narration length
         max_words: Maximum narration length
-    
+        extra_style_notes: [PIXELLE-CUSTOM] Optional channel-specific style
+            notes appended to the narration prompt (see topic_narration.py)
+
     Returns:
         List of narration texts
     """
     from pixelle_video.prompts import build_topic_narration_prompt
-    
+
     logger.info(f"Generating {n_scenes} narrations from topic: {topic}")
-    
+
     prompt = build_topic_narration_prompt(
         topic=topic,
         n_storyboard=n_scenes,
         min_words=min_words,
-        max_words=max_words
+        max_words=max_words,
+        extra_style_notes=extra_style_notes,  # [PIXELLE-CUSTOM]
     )
     
     response = await llm_service(
@@ -204,6 +208,112 @@ async def generate_narrations_from_content(
     
     logger.info(f"Generated {len(narrations)} narrations successfully")
     return narrations
+
+
+# [PIXELLE-CUSTOM] Scene grouping — lets multiple consecutive narrations share
+# one AI-generated image to cut image-generation cost on long scripts.
+def compute_max_group_size(n_scenes: int, target_image_count: int) -> int:
+    """
+    Derive a safe max-scenes-per-image cap from a desired total image count.
+
+    A small +1 slack is added so the LLM has some room to follow content
+    boundaries instead of being forced into perfectly even chunks.
+    """
+    import math
+
+    target_image_count = max(1, min(target_image_count, n_scenes))
+    return max(1, math.ceil(n_scenes / target_image_count) + 1)
+
+
+def _fallback_even_groups(n_scenes: int, target_image_count: int, max_group_size: int) -> List[List[int]]:
+    """
+    Deterministic, always-valid grouping used when the LLM's grouping
+    response is missing, malformed, or violates the constraints. Chunks
+    scene indices evenly, capped at max_group_size.
+    """
+    import math
+
+    target_image_count = max(1, min(target_image_count, n_scenes))
+    chunk_size = min(max_group_size, max(1, math.ceil(n_scenes / target_image_count)))
+
+    groups = []
+    i = 0
+    while i < n_scenes:
+        groups.append(list(range(i, min(i + chunk_size, n_scenes))))
+        i += chunk_size
+    return groups
+
+
+def _validate_groups(groups: Any, n_scenes: int, max_group_size: int) -> Optional[List[List[int]]]:
+    """Return the groups if valid (consecutive, full coverage, size cap), else None."""
+    if not isinstance(groups, list) or not groups:
+        return None
+
+    flat = []
+    for group in groups:
+        if not isinstance(group, list) or not group:
+            return None
+        if len(group) > max_group_size:
+            return None
+        if not all(isinstance(idx, int) for idx in group):
+            return None
+        if group != list(range(group[0], group[0] + len(group))):
+            return None  # not consecutive
+        flat.extend(group)
+
+    if flat != list(range(n_scenes)):
+        return None  # doesn't cover every scene exactly once, in order
+
+    return groups
+
+
+async def decide_scene_image_groups(
+    llm_service,
+    narrations: List[str],
+    target_image_count: int,
+) -> List[List[int]]:
+    """
+    Decide which consecutive narrations should share a single AI-generated
+    image. Always returns a valid grouping — falls back to a deterministic
+    even split if the LLM response is missing/malformed/out of bounds, so a
+    flaky LLM response can never break video generation.
+
+    Args:
+        llm_service: LLM service instance
+        narrations: List of narration texts (already generated)
+        target_image_count: Desired total number of image groups (soft target)
+
+    Returns:
+        List of groups, each a list of consecutive 0-based scene indices,
+        covering every scene index in `narrations` exactly once, in order.
+    """
+    n_scenes = len(narrations)
+    max_group_size = compute_max_group_size(n_scenes, target_image_count)
+
+    if target_image_count >= n_scenes:
+        # No reduction requested/possible — one image per scene, unchanged.
+        return [[i] for i in range(n_scenes)]
+
+    from pixelle_video.prompts import build_scene_grouping_prompt
+
+    prompt = build_scene_grouping_prompt(
+        narrations=narrations,
+        target_image_count=target_image_count,
+        max_group_size=max_group_size,
+    )
+
+    try:
+        response = await llm_service(prompt=prompt, temperature=0.3, max_tokens=1500)
+        result = _parse_json(response)
+        groups = _validate_groups(result.get("groups"), n_scenes, max_group_size)
+        if groups is not None:
+            logger.info(f"Scene grouping: {n_scenes} scenes -> {len(groups)} image groups")
+            return groups
+        logger.warning("Scene grouping: LLM response failed validation, using even-split fallback")
+    except Exception as e:
+        logger.warning(f"Scene grouping: LLM call failed ({e}), using even-split fallback")
+
+    return _fallback_even_groups(n_scenes, target_image_count, max_group_size)
 
 
 async def split_narration_script(
