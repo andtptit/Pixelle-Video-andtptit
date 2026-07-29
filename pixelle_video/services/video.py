@@ -33,6 +33,7 @@ from typing import List, Literal, Optional
 
 import ffmpeg
 from loguru import logger
+from PIL import Image
 
 from pixelle_video.utils.os_util import (
     get_resource_path,
@@ -55,6 +56,63 @@ def check_ffmpeg() -> None:
             "  Ubuntu/Debian: apt-get install ffmpeg\n"
             "  Windows: https://ffmpeg.org/download.html"
         )
+
+
+# [PIXELLE-CUSTOM] Sub-pixel accurate Ken Burns zoom, ported from
+# MoneyPrinterTurbo (app/services/utils/video_effects.py, _zoom_frame).
+#
+# ffmpeg's zoompan/crop filters can only crop at whole-pixel offsets (a hard
+# array slice) — for a subtle zoom spread over many frames, most frames need
+# LESS than 1px of movement, which shows up as "hold a few frames, then snap
+# 1px", i.e. visible stutter (confirmed via frame-by-frame pixel diff on a
+# real render). PIL's Image.transform(EXTENT) with BILINEAR resampling can
+# crop at fractional pixel boundaries, blending neighboring pixels
+# proportionally, so motion stays smooth even for very slow zooms. This is
+# exactly the technique MoneyPrinterTurbo uses for its Ken Burns/zoom
+# transition effects.
+def _pil_zoom_crop(image: Image.Image, scale_factor: float) -> Image.Image:
+    """Center-crop `image` to 1/scale_factor of its size, then resample back
+    up to the original size — i.e. a zoom-in by `scale_factor`."""
+    if abs(scale_factor - 1.0) < 1e-9:
+        return image
+
+    width, height = image.size
+    crop_width = width / scale_factor
+    crop_height = height / scale_factor
+    left = (width - crop_width) / 2
+    top = (height - crop_height) / 2
+    right = left + crop_width
+    bottom = top + crop_height
+
+    return image.transform(
+        (width, height),
+        Image.Transform.EXTENT,
+        (left, top, right, bottom),
+        resample=Image.Resampling.BILINEAR,
+    )
+
+
+def _render_zoom_frame_sequence(
+    image_path: str,
+    frame_dir: str,
+    total_frames: int,
+    zoom_start: float,
+    zoom_end: float,
+) -> str:
+    """Pre-render a Ken Burns zoom frame sequence to `frame_dir` as numbered
+    PNGs, for ffmpeg to encode as an image-sequence input. Returns the
+    printf-style pattern path ffmpeg expects (e.g. ".../frame_%05d.png")."""
+    base_image = Image.open(image_path).convert("RGB")
+    denom = max(1, total_frames - 1)
+    for i in range(total_frames):
+        progress = i / denom
+        scale_factor = zoom_start + (zoom_end - zoom_start) * progress
+        frame = _pil_zoom_crop(base_image, scale_factor)
+        frame.save(
+            os.path.join(frame_dir, f"frame_{i:05d}.png"),
+            compress_level=1,  # speed over size — these files are deleted immediately after encoding
+        )
+    return os.path.join(frame_dir, "frame_%05d.png")
 
 
 class VideoService:
@@ -168,10 +226,22 @@ class VideoService:
     
     def _concat_demuxer(self, videos: List[str], output: str) -> str:
         """
-        Concatenate using concat demuxer (fast, no re-encoding)
-        
+        Concatenate using the concat demuxer, re-encoding into one continuous
+        stream (same "-f concat -safe 0" input as a plain stream-copy concat,
+        but NOT "-c copy").
+
+        [PIXELLE-CUSTOM] Stream-copy concat (-c copy) of independently-encoded
+        segments causes a brief 2-frame flicker right at every cut (confirmed
+        via frame-by-frame pixel diff — verified across multiple segments
+        joined with -c copy), because each segment carries its own PTS/GOP
+        state that doesn't splice cleanly at the byte level. Re-encoding once
+        across the whole concatenated timeline avoids this entirely — this is
+        the same approach MoneyPrinterTurbo uses (concat demuxer input +
+        libx264 output, not -c copy) and it's a much smaller/lower-risk change
+        than switching to the full concat *filter* graph.
+
         FFmpeg equivalent:
-            ffmpeg -f concat -safe 0 -i filelist.txt -c copy output.mp4
+            ffmpeg -f concat -safe 0 -i filelist.txt -c:v libx264 -c:a aac output.mp4
         """
         # Create temporary file list
         with tempfile.NamedTemporaryFile(
@@ -185,13 +255,22 @@ class VideoService:
                 escaped_path = str(abs_path).replace("'", "'\\''")
                 f.write(f"file '{escaped_path}'\n")
             filelist = f.name
-        
+
         try:
             logger.debug(f"Created filelist: {filelist}")
             (
                 ffmpeg
                 .input(filelist, format='concat', safe=0)
-                .output(output, c='copy')
+                .output(
+                    output,
+                    vcodec='libx264',
+                    acodec='aac',
+                    pix_fmt='yuv420p',
+                    audio_bitrate='192k',
+                    preset='medium',
+                    crf=23,
+                    **{'b:v': '2M'}
+                )
                 .overwrite_output()
                 .run(capture_stdout=True, capture_stderr=True)
             )
@@ -638,6 +717,8 @@ class VideoService:
         output: str,
         fps: int = 30,
         zoom_effect: bool = False,
+        zoom_start: float = 1.0,
+        zoom_end: float = 1.1,
     ) -> str:
         """
         Create video from static image and audio
@@ -647,9 +728,14 @@ class VideoService:
             audio: Audio file path
             output: Output video path
             fps: Frames per second
-            zoom_effect: [PIXELLE-CUSTOM] Apply a subtle Ken Burns-style zoom-out
-                (starts slightly zoomed in, eases down to 1.0x by the end of the
-                clip) instead of a fully static frame.
+            zoom_effect: [PIXELLE-CUSTOM] Apply a Ken Burns-style zoom over the
+                clip instead of a fully static frame.
+            zoom_start: [PIXELLE-CUSTOM] Zoom level at the first frame of this
+                clip. Callers processing a whole storyboard should pass the
+                previous frame's zoom_end here so the zoom is continuous
+                across scene cuts instead of snapping back at every transition
+                (see FrameProcessor._step_create_video_segment).
+            zoom_end: [PIXELLE-CUSTOM] Zoom level at the last frame of this clip.
 
         Returns:
             Path to the output video
@@ -672,42 +758,38 @@ class VideoService:
         self._ensure_ffmpeg()
         logger.info("Creating video from image and audio")
 
+        frame_dir = None
         try:
             # Get audio duration to ensure exact video duration match
             probe = ffmpeg.probe(audio)
             audio_duration = float(probe['format']['duration'])
             logger.debug(f"Audio duration: {audio_duration:.3f}s")
 
-            # Input image with loop (loop=1 means loop indefinitely)
-            # Use framerate to set input framerate
-            input_image = ffmpeg.input(image, loop=1, framerate=fps)
-            input_audio = ffmpeg.input(audio)
-
-            # [PIXELLE-CUSTOM] Zoom out effect (image_* templates only, opt-in
-            # from the UI). Ken Burns via ffmpeg's zoompan filter: starts at
-            # START_ZOOM, eases down to 1.0 (full frame, no crop) by the last
-            # frame of the clip, staying centered throughout.
+            # [PIXELLE-CUSTOM] Zoom effect (image_* templates only, opt-in
+            # from the UI). Ken Burns rendered frame-by-frame via PIL
+            # (sub-pixel accurate crop, see _pil_zoom_crop/_render_zoom_frame_
+            # sequence above) instead of ffmpeg's zoompan/crop filters, which
+            # can only crop at whole-pixel offsets — for a subtle zoom this
+            # produces a "hold a few frames, then snap 1px" stutter,
+            # confirmed via frame-by-frame pixel diff on a real render.
+            # zoom_start/zoom_end are provided by the caller (see
+            # FrameProcessor._step_create_video_segment) so consecutive
+            # scenes share the same zoom level at the cut point instead of
+            # each clip resetting independently.
             if zoom_effect:
-                img_probe = ffmpeg.probe(image)
-                img_stream = next(s for s in img_probe['streams'] if s['codec_type'] == 'video')
-                width, height = img_stream['width'], img_stream['height']
-
-                start_zoom = 1.10
-                end_zoom = 1.0
                 total_frames = max(1, round(fps * audio_duration))
-                decrement = (start_zoom - end_zoom) / total_frames
-                zoom_expr = f"if(lte(on,1),{start_zoom},max({end_zoom},zoom-{decrement:.8f}))"
-
-                input_image = input_image.filter(
-                    'zoompan',
-                    z=zoom_expr,
-                    x='iw/2-(iw/zoom/2)',
-                    y='ih/2-(ih/zoom/2)',
-                    d=1,
-                    s=f'{width}x{height}',
-                    fps=fps,
+                frame_dir = tempfile.mkdtemp(prefix="pixelle_zoom_")
+                pattern = _render_zoom_frame_sequence(
+                    image, frame_dir, total_frames, zoom_start, zoom_end
                 )
+                input_image = ffmpeg.input(pattern, framerate=fps)
+            else:
+                # Input image with loop (loop=1 means loop indefinitely)
+                # Use framerate to set input framerate
+                input_image = ffmpeg.input(image, loop=1, framerate=fps)
             # [/PIXELLE-CUSTOM]
+
+            input_audio = ffmpeg.input(audio)
 
             # Combine image and audio
             # Use -t to explicitly set video duration = audio duration
@@ -729,14 +811,18 @@ class VideoService:
                 .overwrite_output()
                 .run(capture_stdout=True, capture_stderr=True)
             )
-            
+
             logger.success(f"Video created from image: {output} (duration: {audio_duration:.3f}s)")
             return output
         except ffmpeg.Error as e:
             error_msg = e.stderr.decode() if e.stderr else str(e)
             logger.error(f"FFmpeg error creating video from image: {error_msg}")
             raise RuntimeError(f"Failed to create video from image: {error_msg}")
-    
+        finally:
+            # [PIXELLE-CUSTOM] Clean up the pre-rendered zoom frame sequence
+            if frame_dir and os.path.exists(frame_dir):
+                shutil.rmtree(frame_dir, ignore_errors=True)
+
     def add_bgm(
         self,
         video: str,

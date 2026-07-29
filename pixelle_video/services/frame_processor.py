@@ -166,7 +166,7 @@ class FrameProcessor:
                     action="video"
                 ))
             
-            await self._step_create_video_segment(frame, config)
+            await self._step_create_video_segment(frame, config, total_frames)
             
             logger.info(f"✅ Frame {frame.index} completed")
             return frame
@@ -409,7 +409,8 @@ class FrameProcessor:
     async def _step_create_video_segment(
         self,
         frame: StoryboardFrame,
-        config: StoryboardConfig
+        config: StoryboardConfig,
+        total_frames: int = 1,
     ):
         """Step 4: Create video segment from media + audio"""
         logger.debug(f"  4/4: Creating video segment for frame {frame.index}...")
@@ -459,10 +460,21 @@ class FrameProcessor:
             # The asset_default.html template includes the image in the composition
             logger.debug(f"  → Using image-based composition")
 
-            # [PIXELLE-CUSTOM] Zoom out only applies to real AI-generated image
+            # [PIXELLE-CUSTOM] Zoom only applies to real AI-generated image
             # frames (frame.media_type == "image"), never to static_* templates
             # (frame.media_type stays None for those) even if the flag is set.
             zoom_effect = bool(getattr(config, "zoom_effect", False)) and frame.media_type == "image"
+
+            # Zoom is continuous across the whole video (1.00 -> 1.10 spread
+            # evenly over all scenes) instead of each clip resetting its own
+            # zoom independently — that used to produce a visible "pop" at
+            # every scene cut, since the last frame of clip N and the first
+            # frame of clip N+1 landed at different zoom levels.
+            zoom_min, zoom_max = 1.0, 1.1
+            n = max(1, total_frames)
+            per_frame_range = (zoom_max - zoom_min) / n
+            zoom_start = zoom_min + frame.index * per_frame_range
+            zoom_end = zoom_min + (frame.index + 1) * per_frame_range
 
             segment_path = video_service.create_video_from_image(
                 image=frame.composed_image_path,
@@ -470,6 +482,8 @@ class FrameProcessor:
                 output=output_path,
                 fps=config.video_fps,
                 zoom_effect=zoom_effect,
+                zoom_start=zoom_start,
+                zoom_end=zoom_end,
             )
             # [/PIXELLE-CUSTOM]
         

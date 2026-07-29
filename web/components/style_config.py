@@ -641,9 +641,13 @@ def render_style_config(pixelle_video):
         # Backward compatibility
         st.session_state['template_requires_image'] = (template_media_type == "image")
 
-        # [PIXELLE-CUSTOM] Zoom out effect — only meaningful for image_*
-        # templates (a static-style template has no AI image to zoom on;
-        # a video_* template is already moving footage).
+        # [PIXELLE-CUSTOM] Zoom out effect — re-enabled using a PIL-based
+        # sub-pixel accurate Ken Burns render (ported from MoneyPrinterTurbo),
+        # which avoids the whole-pixel-only crop stutter that ffmpeg's
+        # zoompan/crop filters had (see video.py: _pil_zoom_crop /
+        # _render_zoom_frame_sequence). Off by default — must be explicitly
+        # checked, so a channel that never touches this setting keeps
+        # today's plain static-image behavior unchanged.
         zoom_effect = False
         if template_media_type == "image":
             zoom_effect = st.checkbox(
