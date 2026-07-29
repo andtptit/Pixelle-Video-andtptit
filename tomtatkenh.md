@@ -147,3 +147,23 @@ Xuất JSON: {"narrations": [...]}
 - Các prompt trên độc lập với app Pixelle-Video — dùng được trên bất kỳ AI chat nào (ChatGPT, Gemini, Claude, DeepSeek...) để brainstorm/kịch bản dự phòng.
 - Sau khi có kịch bản từ AI ngoài, dán vào chế độ **Custom Script** trong app để giữ nguyên không bị AI viết lại.
 - Muốn dùng trực tiếp trong app (không cần công cụ ngoài), dùng ô **Narration Style Notes** ở tab Topic — dán phần "giọng văn/quy tắc riêng" (mục 2 ở trên) vào đó, AI trong app sẽ tự tuân theo.
+
+## 5. Prompt Prefix — phong cách hình ảnh (dán vào ô "Prompt Prefix" trong app)
+
+Ô này nằm ở cột giữa (Style Config), mục sinh ảnh/video, field **"Prompt Prefix"** — nó tự động được nối vào trước mọi prompt sinh ảnh của từng scene, dùng để ép đồng nhất phong cách hình ảnh cho cả kênh mà không cần gõ lại mỗi lần. Có thể lưu kèm trong **Channel Preset** để tái sử dụng nhanh giữa các kênh.
+
+Khớp với mô tả phong cách ở mục 1 ("minh hoạ tối giản, stick-figure line art hoặc flat pastel"), gợi ý 2 phiên bản:
+
+**A. Stick-figure tối giản (mặc định của repo, đen trắng)**
+```
+Minimalist black-and-white matchstick figure style illustration, clean lines, simple sketch style, plain background, no text
+```
+
+**B. Flat pastel ấm áp (hợp chủ đề chữa lành/tâm lý tình cảm hơn)**
+```
+Flat illustration, soft pastel color palette, minimalist line art, warm and gentle mood, simple shapes, plain solid background, no text, no watermark
+```
+
+Ghi chú:
+- Có thể thêm `, warm pastel accent color on 1 keyword` nếu muốn tô màu nhấn 1 từ khoá như mô tả ở mục 1 (nhưng việc tô màu nhấn chữ thực tế do template HTML xử lý, không phải do prompt ảnh — prefix chỉ ảnh hưởng phần *hình minh hoạ*, không ảnh hưởng phần chữ/phụ đề).
+- Nếu đổi giữa 2 phong cách A/B cho các kênh khác nhau, nên lưu riêng thành 2 Channel Preset khác nhau (ví dụ "kênh_stickfigure", "kênh_pastel") để không phải gõ lại prefix mỗi lần đổi kênh.
