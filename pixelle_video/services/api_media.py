@@ -25,6 +25,9 @@ class APIProviderMediaService:
             "wan2.7-image",
             "wan2.7-image-pro",
             "wan2.6-t2i",
+            "wan2.6-image",  # [PIXELLE-CUSTOM] distinct model from wan2.6-t2i, same generic dashscope text-to-image contract
+            "qwen-image-edit-plus",  # [PIXELLE-CUSTOM] image EDITING model — requires a reference image (image_paths); will fail if used as pure text-to-image with no input image
+            "qwen-image-edit-plus-2025-10-30",  # [PIXELLE-CUSTOM] pinned dated variant of qwen-image-edit-plus
         ],
         "openai": [
             "gpt-image-2",
