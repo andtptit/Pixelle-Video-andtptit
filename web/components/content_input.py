@@ -30,6 +30,7 @@ async def _generate_script_preview(
     narration_style_notes: str = "",
     enable_scene_grouping: bool = False,
     target_image_count: int | None = None,
+    enable_pause_dash: bool = True,
 ):
     from pixelle_video.utils.content_generators import (
         generate_narrations_from_topic,
@@ -42,6 +43,7 @@ async def _generate_script_preview(
         topic=topic,
         n_scenes=n_scenes,
         extra_style_notes=narration_style_notes,
+        enable_pause_dash=enable_pause_dash,
     )
     title = await generate_title(pixelle_video.llm, topic, strategy="auto")
 
@@ -63,12 +65,24 @@ async def _generate_script_preview(
 # [PIXELLE-CUSTOM] Remix — reuse the images/videos from a previously generated
 # video and only lightly edit the narration text (wording/tone), so no new
 # image/video generation cost is incurred, only a fresh TTS pass.
+#
+# Also lists "failed" tasks (e.g. a mid-run TTS error) — as long as at least
+# one scene already got its AI image generated before the failure, that
+# already-paid-for image is worth reusing instead of discarding the whole
+# task. See LinearVideoPipeline.handle_exception, which now persists
+# whatever partial storyboard exists at failure time.
 async def _list_remix_candidates(pixelle_video, limit: int = 30):
-    result = await pixelle_video.history.get_task_list(
+    completed = await pixelle_video.history.get_task_list(
         page=1, page_size=limit, status="completed",
         sort_by="created_at", sort_order="desc",
     )
-    return result.get("tasks", [])
+    failed = await pixelle_video.history.get_task_list(
+        page=1, page_size=limit, status="failed",
+        sort_by="created_at", sort_order="desc",
+    )
+    tasks = completed.get("tasks", []) + failed.get("tasks", [])
+    tasks.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+    return tasks[:limit]
 
 
 async def _load_remix_source(pixelle_video, task_id: str):
@@ -121,7 +135,16 @@ def _render_remix_section(pixelle_video) -> dict:
             "remix_narrations": [], "remix_source_frames": [],
         }
 
-    options = {t["task_id"]: f"{t.get('title') or t['task_id']} ({t.get('n_frames', 0)} scenes)" for t in candidates}
+    # [PIXELLE-CUSTOM] Mark failed tasks in the label — n_frames is 0 for
+    # these (never reached finalize()), so the scene count isn't shown until
+    # after Load, where the real per-frame media state is checked.
+    def _remix_label(t):
+        title = t.get('title') or t['task_id']
+        if t.get('status') == 'failed':
+            return f"⚠️ {title} ({tr('remix.failed_task_marker')})"
+        return f"{title} ({t.get('n_frames', 0)} scenes)"
+
+    options = {t["task_id"]: _remix_label(t) for t in candidates}
     selected_task_id = st.selectbox(
         tr("remix.select_task"),
         options=list(options.keys()),
@@ -147,6 +170,15 @@ def _render_remix_section(pixelle_video) -> dict:
                 for f in storyboard.frames
             ]
             st.session_state["remix_narrations_default"] = [f.narration for f in storyboard.frames]
+
+            # [PIXELLE-CUSTOM] A task loaded from a failed run may have some
+            # scenes past the failure point with no image/video generated yet
+            # — flag this clearly instead of silently producing blank frames.
+            missing = [f.index + 1 for f in storyboard.frames if not f.image_path and not f.video_path]
+            if missing:
+                st.warning(tr("remix.missing_media_warning", scenes=", ".join(str(i) for i in missing)))
+            # [/PIXELLE-CUSTOM]
+
             # [PIXELLE-CUSTOM] Bump the widget-key version so the title/narration
             # widgets below are recreated fresh with the new value=... Streamlit
             # keeps a widget's *frontend* value pinned to its key across reruns
@@ -366,6 +398,20 @@ def render_content_input(pixelle_video=None):
                 )
             # [/PIXELLE-CUSTOM]
 
+            # [PIXELLE-CUSTOM] Em-dash TTS pause marker — on by default (helps
+            # the local Edge-TTS pace long sentences naturally). Shown
+            # regardless of mode: in "generate" it also steers the narration
+            # LLM to insert the marker; in "fixed"/Custom Script it still
+            # governs whether any "—" you typed yourself gets read as a pause
+            # and stripped from the subtitle afterward.
+            enable_pause_dash = st.checkbox(
+                tr("input.enable_pause_dash"),
+                value=True,
+                help=tr("input.enable_pause_dash_help"),
+                key="enable_pause_dash",
+            )
+            # [/PIXELLE-CUSTOM]
+
             # [PIXELLE-CUSTOM] Scene Grouping — let consecutive narrations share
             # one AI-generated image (image_* templates only) to cut image
             # generation cost on long scripts. Off by default (no behavior
@@ -423,6 +469,7 @@ def render_content_input(pixelle_video=None):
                                         _generate_script_preview(
                                             pixelle_video, text, n_scenes, narration_style_notes,
                                             enable_scene_grouping, target_image_count,
+                                            enable_pause_dash,
                                         )
                                     )
                                     st.session_state["sp_narrations"] = narrations
@@ -494,6 +541,7 @@ def render_content_input(pixelle_video=None):
                 "title": final_title,
                 "n_scenes": n_scenes,
                 "narration_style_notes": narration_style_notes,  # [PIXELLE-CUSTOM]
+                "enable_pause_dash": enable_pause_dash,  # [PIXELLE-CUSTOM]
                 "enable_scene_grouping": enable_scene_grouping,  # [PIXELLE-CUSTOM]
                 "target_image_count": target_image_count,  # [PIXELLE-CUSTOM]
                 "split_mode": final_split_mode

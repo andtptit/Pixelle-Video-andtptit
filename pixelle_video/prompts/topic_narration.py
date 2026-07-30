@@ -35,7 +35,7 @@ The user will input a topic or theme. You need to create {n_storyboard} video st
 - Output language requirement: Strictly output according to the language of the user's input topic or theme. For example: if the user's input is in English, the output copy must be in English, same for Chinese.
 - Purpose: For TTS to generate short video audio, explaining topics in an accessible way
 - Word count limit: Strictly control to {min_words}~{max_words} words (minimum not less than {min_words} words)
-- Ending format: Do not use punctuation at the end of each narration. If there are sentence breaks in the narration, Chinese punctuation (,。?!……:"") must be used to express tone and pauses. Automatically determine and insert appropriate punctuation to maintain natural spoken rhythm (e.g., "Right? Wrong." should have pauses and tonal shifts)
+- Ending format: Do not use punctuation at the end of each narration. If there are sentence breaks in the narration, Chinese punctuation (,。?!……:"") must be used to express tone and pauses. Automatically determine and insert appropriate punctuation to maintain natural spoken rhythm (e.g., "Right? Wrong." should have pauses and tonal shifts){pause_dash_instruction}
 - Content requirement: Expand around the topic, each storyboard conveys a valuable viewpoint or insight
 - Style requirement: Like chatting with a friend, accessible, sincere, inspiring, avoid academic and stiff expressions, reject formulaic and template expressions
 - Emotion and tone: Gentle, sincere, enthusiastic, like a friend with insights sharing thoughts
@@ -132,12 +132,30 @@ Only output JSON, no other content.
 """
 
 
+# [PIXELLE-CUSTOM] Em dash (—) as a TTS pause marker. The LLM decides WHERE
+# it makes sense based on the sentence's own meaning/rhythm (not a fixed
+# rule/position) — reusing the exact same judgment it already applies to
+# regular punctuation above, just for a stronger pause. The em dash is
+# stripped from the on-screen subtitle later (see frame_processor.py) so it
+# only affects TTS pacing, never the displayed text.
+PAUSE_DASH_INSTRUCTION = (
+    " Additionally, for any narration that is long or has multiple clauses, "
+    "insert an em dash (—) at the ONE most natural pause/breath point (e.g. "
+    "before a contrasting idea, after a subordinate clause, before a "
+    "rhetorical emphasis) based on that specific sentence's meaning and "
+    "rhythm — not a fixed position. Use at most one em dash per narration; "
+    "skip it entirely if the narration is already short/simple and doesn't "
+    "need an extra pause beyond normal punctuation."
+)
+
+
 def build_topic_narration_prompt(
     topic: str,
     n_storyboard: int,
     min_words: int,
     max_words: int,
     extra_style_notes: Optional[str] = None,  # [PIXELLE-CUSTOM]
+    enable_pause_dash: bool = True,  # [PIXELLE-CUSTOM]
 ) -> str:
     """
     Build topic narration prompt
@@ -151,6 +169,11 @@ def build_topic_narration_prompt(
             notes (tone, structure, banned words, etc.) appended as a
             "must follow" section. Empty/None reproduces the exact default
             prompt (no behavior change).
+        enable_pause_dash: [PIXELLE-CUSTOM] Whether to instruct the LLM to
+            insert em-dash pause markers (see PAUSE_DASH_INSTRUCTION). Default
+            True since the current local TTS (Edge-TTS) benefits from it;
+            turn off for TTS engines/voices with better native pacing (e.g.
+            ElevenLabs) where the marker isn't needed.
 
     Returns:
         Formatted prompt
@@ -161,11 +184,13 @@ def build_topic_narration_prompt(
             "\n# Channel-Specific Style Notes (Must Follow)\n"
             f"{extra_style_notes.strip()}\n"
         )
+    pause_dash_instruction = PAUSE_DASH_INSTRUCTION if enable_pause_dash else ""  # [PIXELLE-CUSTOM]
     return TOPIC_NARRATION_PROMPT.format(
         topic=topic,
         n_storyboard=n_storyboard,
         min_words=min_words,
         max_words=max_words,
         extra_style_notes_block=extra_style_notes_block,  # [PIXELLE-CUSTOM]
+        pause_dash_instruction=pause_dash_instruction,  # [PIXELLE-CUSTOM]
     )
 

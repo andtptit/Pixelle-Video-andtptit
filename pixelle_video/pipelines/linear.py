@@ -176,4 +176,24 @@ class LinearVideoPipeline(BasePipeline):
                     await persistence.update_task_status(ctx.task_id, "failed", error=str(error))
                 except Exception as persist_err:
                     logger.debug(f"Failed to persist 'failed' status for {ctx.task_id}: {persist_err}")
+
+                # [PIXELLE-CUSTOM] Also persist whatever storyboard/frame data
+                # exists so far (e.g. a mid-run TTS failure after several
+                # scenes already had their AI image generated — that image
+                # generation cost real money). Without this, only finalize()
+                # ever wrote storyboard.json, so a failed task's already-paid
+                # images had no record linking them back to their scene —
+                # Remix couldn't offer them for reuse even though the files
+                # were sitting on disk. Best-effort: some frames past the
+                # failure point may still have no image (never got that far).
+                if ctx.storyboard and ctx.storyboard.frames:
+                    try:
+                        await persistence.save_storyboard(ctx.task_id, ctx.storyboard)
+                        logger.info(
+                            f"💾 Saved partial storyboard for failed task {ctx.task_id} "
+                            f"({sum(1 for f in ctx.storyboard.frames if f.image_path or f.video_path)}/"
+                            f"{len(ctx.storyboard.frames)} scenes have media, safe to Remix)"
+                        )
+                    except Exception as persist_err:
+                        logger.debug(f"Failed to persist partial storyboard for {ctx.task_id}: {persist_err}")
         # [/PIXELLE-CUSTOM]

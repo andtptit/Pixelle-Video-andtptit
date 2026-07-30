@@ -28,6 +28,11 @@ class APIProviderMediaService:
             "wan2.6-image",  # [PIXELLE-CUSTOM] distinct model from wan2.6-t2i, same generic dashscope text-to-image contract
             "qwen-image-edit-plus",  # [PIXELLE-CUSTOM] image EDITING model — requires a reference image (image_paths); will fail if used as pure text-to-image with no input image
             "qwen-image-edit-plus-2025-10-30",  # [PIXELLE-CUSTOM] pinned dated variant of qwen-image-edit-plus
+            "qwen-image-edit",  # [PIXELLE-CUSTOM] base editing model (1 image per call) — also requires a reference image, same caveat as qwen-image-edit-plus
+            "qwen-image",  # [PIXELLE-CUSTOM] base Qwen-Image text-to-image model
+            "qwen-image-2.0",  # [PIXELLE-CUSTOM] newer Qwen-Image text-to-image generation
+            "z-image-turbo",  # [PIXELLE-CUSTOM] 6B-param fast text-to-image model, sub-second generation; same DashScope multimodal-generation contract
+            "qwen-image-max-2025-12-30",  # [PIXELLE-CUSTOM] pinned dated variant of qwen-image-max
         ],
         "openai": [
             "gpt-image-2",
@@ -50,6 +55,8 @@ class APIProviderMediaService:
             "happyhorse-1.0-i2v",
             "happyhorse-1.0-r2v",
             "happyhorse-1.0-video-edit",
+            "wan2.1-kf2v-plus",  # [PIXELLE-CUSTOM] first/last-frame image-to-video (Professional edition)
+            "wan2.1-t2v-plus",  # [PIXELLE-CUSTOM] text-to-video (Plus edition)
         ],
         "kling": [
             "kling-v3",
@@ -254,6 +261,42 @@ class APIProviderMediaService:
             ],
             "contract_issues": [
                 "HappyHorse reference-to-video supports reference_image media. The public contract does not expose reference_voice in this API.",
+            ],
+        },
+        ("dashscope", "wan2.1-kf2v-plus"): {  # [PIXELLE-CUSTOM]
+            "ability_type": "image_to_video",
+            "ability_types": ["start_end_frame_i2v"],
+            "adapter_ability_types": ["start_end_frame_i2v"],
+            "input_modalities": ["text", "image"],
+            "adapter_input_modalities": ["text", "image"],
+            "duration": {"min": 3, "max": 5, "integer": True, "verified": False},
+            "resolutions": ["720P"],
+            "ratios": ["16:9", "9:16", "1:1"],
+            "format": "mp4",
+            "api_contract_verified": False,
+            "source_urls": [
+                "https://www.alibabacloud.com/help/en/model-studio/legacy-image-to-video-by-first-and-last-frame-api-reference",
+            ],
+            "contract_issues": [
+                "First/last-frame (keyframe-to-video) model — exact duration/resolution limits not independently confirmed against the live API; verify before relying on this in production.",
+            ],
+        },
+        ("dashscope", "wan2.1-t2v-plus"): {  # [PIXELLE-CUSTOM]
+            "ability_type": "text_to_video",
+            "ability_types": ["text_to_video"],
+            "adapter_ability_types": ["text_to_video"],
+            "input_modalities": ["text"],
+            "adapter_input_modalities": ["text"],
+            "duration": {"min": 5, "max": 5, "integer": True, "verified": False},
+            "resolutions": ["480P", "720P"],
+            "ratios": ["16:9", "9:16", "1:1"],
+            "format": "mp4",
+            "api_contract_verified": False,
+            "source_urls": [
+                "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B",
+            ],
+            "contract_issues": [
+                "Older-generation (2.1) text-to-video Plus edition — exact DashScope duration/resolution contract not independently confirmed; verify before relying on this in production.",
             ],
         },
         ("kling", "kling-v3"): {

@@ -146,6 +146,7 @@ class StandardPipeline(LinearVideoPipeline):
                 min_words=min_words,
                 max_words=max_words,
                 extra_style_notes=ctx.params.get("narration_style_notes"),  # [PIXELLE-CUSTOM]
+                enable_pause_dash=ctx.params.get("enable_pause_dash", True),  # [PIXELLE-CUSTOM]
             )
             logger.info(f"✅ Generated {len(ctx.narrations)} narrations")
         else:  # fixed
@@ -180,10 +181,78 @@ class StandardPipeline(LinearVideoPipeline):
 
     async def plan_visuals(self, ctx: PipelineContext):
         """Step 4: Generate image prompts or visual descriptions."""
-        # [PIXELLE-CUSTOM] Remix mode: reusing existing images, no new image prompts needed.
+        # [PIXELLE-CUSTOM] Remix mode: reuse existing images/videos where
+        # available (no new prompt needed). But a task Remixed from a FAILED
+        # run may have scenes past the failure point with no media at all
+        # (see LinearVideoPipeline.handle_exception) — those still need a
+        # fresh image_prompt so frame_processor actually generates something
+        # for them instead of silently rendering a blank scene.
         if ctx.params.get("mode") == "remix":
-            ctx.image_prompts = [None] * len(ctx.narrations)
-            logger.info("⚡ Remix mode: skipping image prompt generation (reusing existing media)")
+            # A static_* template never has AI media to begin with — every
+            # source frame legitimately has no image/video, so don't treat
+            # that as "missing media needing regeneration".
+            frame_template = ctx.params.get("frame_template") or "1080x1920/default.html"
+            template_requires_media = get_template_type(Path(frame_template).name) in ("image", "video")
+
+            source_frames = ctx.params.get("remix_source_frames") or []
+            missing_indices = [
+                i for i, source in enumerate(source_frames)
+                if not source.get("image_path") and not source.get("video_path")
+            ] if template_requires_media else []
+
+            if not missing_indices:
+                ctx.image_prompts = [None] * len(ctx.narrations)
+                logger.info("⚡ Remix mode: skipping image prompt generation (reusing existing media)")
+                return
+
+            logger.info(
+                f"⚡ Remix mode: {len(missing_indices)}/{len(ctx.narrations)} scene(s) have no "
+                f"reused media (from a partially-failed source run) — generating fresh prompts for those only"
+            )
+            min_words = ctx.params.get("min_image_prompt_words", 30)
+            max_words = ctx.params.get("max_image_prompt_words", 60)
+            base_image_prompts = await generate_image_prompts(
+                self.llm,
+                narrations=ctx.narrations,
+                min_words=min_words,
+                max_words=max_words,
+            )
+            prompt_prefix = ctx.params.get("prompt_prefix") or self.core.config.get("comfyui", {}).get("image", {}).get("prompt_prefix", "")
+            ctx.image_prompts = [
+                build_image_prompt(base_image_prompts[i], prompt_prefix) if i in missing_indices else None
+                for i in range(len(ctx.narrations))
+            ]
+
+            # [PIXELLE-CUSTOM] Scene grouping also applies to the missing
+            # block, if enabled — e.g. regenerating scenes 6-9 can still
+            # share fewer images instead of always 1:1, same as a normal
+            # generation would. Missing indices are always one consecutive
+            # trailing run (frames are produced in order; nothing after the
+            # failure point ever started), so grouping just the sub-sequence
+            # of missing narrations and mapping local group indices back to
+            # global frame indices is safe.
+            if ctx.params.get("enable_scene_grouping") and len(missing_indices) > 1:
+                from pixelle_video.utils.content_generators import decide_scene_image_groups
+
+                target_image_count = ctx.params.get("target_image_count") or len(ctx.narrations)
+                missing_target = max(1, round(len(missing_indices) * target_image_count / len(ctx.narrations)))
+                missing_narrations = [ctx.narrations[i] for i in missing_indices]
+
+                groups = await decide_scene_image_groups(
+                    self.llm,
+                    narrations=missing_narrations,
+                    target_image_count=missing_target,
+                )
+                ctx.image_group_leader_indices = [None] * len(ctx.narrations)
+                for group in groups:
+                    global_group = [missing_indices[local_i] for local_i in group]
+                    leader = global_group[0]
+                    for global_i in global_group[1:]:
+                        ctx.image_group_leader_indices[global_i] = leader
+                logger.info(
+                    f"🖼️ Remix mode: {len(missing_indices)} missing scene(s) -> {len(groups)} image group(s)"
+                )
+            # [/PIXELLE-CUSTOM]
             return
         # [/PIXELLE-CUSTOM]
 
@@ -330,6 +399,7 @@ class StandardPipeline(LinearVideoPipeline):
             zoom_effect=bool(ctx.params.get("zoom_effect", False)),  # [PIXELLE-CUSTOM]
             enable_scene_grouping=bool(ctx.params.get("enable_scene_grouping", False)),  # [PIXELLE-CUSTOM]
             target_image_count=ctx.params.get("target_image_count"),  # [PIXELLE-CUSTOM]
+            enable_pause_dash=bool(ctx.params.get("enable_pause_dash", True)),  # [PIXELLE-CUSTOM]
         )
         
         # Create storyboard

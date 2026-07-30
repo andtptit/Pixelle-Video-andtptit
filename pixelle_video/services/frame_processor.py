@@ -213,13 +213,27 @@ class FrameProcessor:
                 tts_params["ref_audio"] = config.ref_audio
         
         audio_path = await self.core.tts(**tts_params)
-        
+
         frame.audio_path = audio_path
-        
+
         # Get audio duration
         frame.duration = await self._get_audio_duration(audio_path)
-        
+
         logger.debug(f"  ✓ Audio generated: {audio_path} ({frame.duration:.2f}s)")
+
+        # [PIXELLE-CUSTOM] The em dash (—) above was read as a pause by TTS
+        # (tts_params["text"] used the version still containing it). Strip it
+        # from frame.narration now, before _step_compose_frame reuses this
+        # same field for the on-screen subtitle — the dash should only ever
+        # affect voiceover pacing, never appear in the displayed text.
+        if getattr(config, "enable_pause_dash", True) and frame.narration and "—" in frame.narration:
+            frame.narration = (
+                frame.narration.replace(" — ", ", ")
+                .replace("— ", ", ")
+                .replace(" —", ",")
+                .replace("—", ",")
+            )
+        # [/PIXELLE-CUSTOM]
     
     async def _step_generate_media(
         self,

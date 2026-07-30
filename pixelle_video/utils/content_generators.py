@@ -99,6 +99,7 @@ async def generate_narrations_from_topic(
     min_words: int = 5,
     max_words: int = 20,
     extra_style_notes: Optional[str] = None,  # [PIXELLE-CUSTOM]
+    enable_pause_dash: bool = True,  # [PIXELLE-CUSTOM]
 ) -> List[str]:
     """
     Generate narrations from topic using LLM
@@ -111,6 +112,8 @@ async def generate_narrations_from_topic(
         max_words: Maximum narration length
         extra_style_notes: [PIXELLE-CUSTOM] Optional channel-specific style
             notes appended to the narration prompt (see topic_narration.py)
+        enable_pause_dash: [PIXELLE-CUSTOM] Whether to instruct the LLM to
+            mark natural TTS pause points with an em dash (see topic_narration.py)
 
     Returns:
         List of narration texts
@@ -125,6 +128,7 @@ async def generate_narrations_from_topic(
         min_words=min_words,
         max_words=max_words,
         extra_style_notes=extra_style_notes,  # [PIXELLE-CUSTOM]
+        enable_pause_dash=enable_pause_dash,  # [PIXELLE-CUSTOM]
     )
     
     response = await llm_service(

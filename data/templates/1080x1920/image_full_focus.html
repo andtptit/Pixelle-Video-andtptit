@@ -8,7 +8,10 @@
     <title>Full Focus - 1080x1920</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <!-- [PIXELLE-CUSTOM] Curated subtitle font choices, all confirmed Vietnamese-diacritic support:
+         Baloo 2 (bold/rounded/playful), Be Vietnam Pro (clean modern sans, made by a VN team),
+         Quicksand (light rounded). Type the exact name into the "Font Family" field below to switch. -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Baloo+2:wght@600;700;800&family=Be+Vietnam+Pro:wght@600;700;800&family=Quicksand:wght@600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -51,16 +54,30 @@
         }
 
         .subtitle-area .text {
-            font-size: 46px;
-            font-weight: 700;
-            line-height: 1.5;
+            /* [PIXELLE-CUSTOM] {{font_family:text=Baloo 2}} — custom
+               parameter, auto-shows as a text input in the Web UI (same
+               mechanism as bg_color/text_color elsewhere). Type one of the
+               preloaded names above (Baloo 2 / Be Vietnam Pro / Quicksand)
+               to switch without editing this file.
+               -webkit-text-stroke + paint-order gives the thick outlined
+               "sticker" look (fill painted over the stroke, not under it). */
+            font-family: '{{font_family:text=Baloo 2}}', 'Noto Sans SC', 'PingFang SC', sans-serif;
+            font-size: 50px;
+            font-weight: 800;
+            line-height: 1.6;
             color: #ffffff;
             letter-spacing: 1px;
-            text-shadow: 0 4px 16px rgba(0,0,0,0.5),
-                        -1px -1px 0 rgba(0,0,0,0.4),
-                        1px -1px 0 rgba(0,0,0,0.4),
-                        -1px 1px 0 rgba(0,0,0,0.4),
-                        1px 1px 0 rgba(0,0,0,0.4);
+            -webkit-text-stroke: 3px #000000;
+            paint-order: stroke fill;
+            text-shadow: 0 4px 10px rgba(0,0,0,0.4);
+        }
+
+        /* [PIXELLE-CUSTOM] Optional accent word — wrap a word in
+           <span class="highlight">...</span> directly in the narration text
+           to color just that word (e.g. "Nhìn thì có vẻ như là
+           <span class=\"highlight\">rất yêu</span> bạn"). */
+        .subtitle-area .text .highlight {
+            color: #ffb020;
         }
     </style>
 </head>

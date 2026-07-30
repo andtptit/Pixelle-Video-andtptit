@@ -45,6 +45,7 @@ PRESET_KEYS = [
     "standard_video_workflow_source_select",
     "style_prompt_prefix",
     "narration_style_notes",
+    "enable_pause_dash",
     "enable_scene_grouping",
     "target_image_count",
     "std_n_scenes",

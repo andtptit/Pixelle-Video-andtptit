@@ -67,6 +67,14 @@ class StoryboardConfig:
     enable_scene_grouping: bool = False
     target_image_count: Optional[int] = None
 
+    # [PIXELLE-CUSTOM] Em-dash TTS pause marker — the narration LLM inserts a
+    # "—" at natural pause points (see prompts/topic_narration.py), which
+    # FrameProcessor._step_generate_audio strips from the on-screen subtitle
+    # right after TTS reads it, so it only affects voiceover pacing. Default
+    # on for the local Edge-TTS; turn off for TTS engines/voices with better
+    # native pacing that don't need the marker (e.g. ElevenLabs).
+    enable_pause_dash: bool = True
+
 
 @dataclass
 class StoryboardFrame:

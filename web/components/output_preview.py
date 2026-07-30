@@ -185,6 +185,7 @@ def render_single_output(pixelle_video, video_params):
     prompt_prefix = video_params.get("prompt_prefix", "")
     zoom_effect = video_params.get("zoom_effect", False)  # [PIXELLE-CUSTOM]
     narration_style_notes = video_params.get("narration_style_notes", "")  # [PIXELLE-CUSTOM]
+    enable_pause_dash = video_params.get("enable_pause_dash", True)  # [PIXELLE-CUSTOM]
     enable_scene_grouping = video_params.get("enable_scene_grouping", False)  # [PIXELLE-CUSTOM]
     target_image_count = video_params.get("target_image_count")  # [PIXELLE-CUSTOM]
 
@@ -255,6 +256,7 @@ def render_single_output(pixelle_video, video_params):
                 "frame_template": frame_template,
                 "prompt_prefix": prompt_prefix,
                 "narration_style_notes": narration_style_notes,  # [PIXELLE-CUSTOM]
+                "enable_pause_dash": enable_pause_dash,  # [PIXELLE-CUSTOM]
                 "enable_scene_grouping": enable_scene_grouping,  # [PIXELLE-CUSTOM]
                 "target_image_count": target_image_count,  # [PIXELLE-CUSTOM]
                 "bgm_path": bgm_path,
