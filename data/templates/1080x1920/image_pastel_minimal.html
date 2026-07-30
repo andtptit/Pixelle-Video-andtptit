@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="template:media-width" content="900">
+    <meta name="template:media-height" content="1200">
+    <meta name="viewport" content="width=1080, height=1920">
+    <title>Pastel Minimal - 1080x1920</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body { width: 1080px; height: 1920px; overflow: hidden; }
+
+        body {
+            font-family: 'Noto Sans SC', 'PingFang SC', 'Source Han Sans', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: {{bg_color:color=#d9c8b4}};
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Subject area — image is centered and fully visible (contain), not cropped */
+        .media-area {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 80px 90px 20px 90px;
+        }
+
+        .media-area img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* Subtitle pinned near the bottom */
+        .subtitle-area {
+            padding: 0 90px 160px 90px;
+            text-align: center;
+        }
+
+        .subtitle-area .text {
+            font-size: 46px;
+            font-weight: 700;
+            line-height: 1.5;
+            color: {{text_color:color=#33261c}};
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div class="media-area">
+        <img src="{{image}}" alt="subject">
+    </div>
+    <div class="subtitle-area">
+        <div class="text">{{text}}</div>
+    </div>
+</body>
+</html>
